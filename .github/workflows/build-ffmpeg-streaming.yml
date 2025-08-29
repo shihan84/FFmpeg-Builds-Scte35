@@ -1,0 +1,256 @@
+name: Build FFmpeg with Full Streaming Support
+
+on:
+  workflow_dispatch:  # Manual trigger
+  push:
+    branches: [ main ]
+  schedule:
+    - cron: '0 0 1 * *'  # Monthly rebuild
+
+jobs:
+  build-ffmpeg:
+    strategy:
+      matrix:
+        target: [linux-x64, windows-x64, macos-x64]
+    runs-on: ${{ matrix.target == 'windows-x64' && 'windows-latest' || matrix.target == 'macos-x64' && 'macos-latest' || 'ubuntu-latest' }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup environment
+      run: |
+        echo "Building for ${{ matrix.target }}"
+        mkdir -p build
+
+    - name: Install dependencies (Linux)
+      if: matrix.target == 'linux-x64'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          nasm \
+          yasm \
+          git \
+          pkg-config \
+          cmake \
+          autoconf \
+          automake \
+          libtool \
+          zlib1g-dev \
+          libssl-dev \
+          libsrt-dev \
+          librtmp-dev \
+          libx264-dev \
+          libx265-dev \
+          libvpx-dev \
+          libaom-dev \
+          libdav1d-dev \
+          libass-dev \
+          libfreetype6-dev \
+          libfribidi-dev \
+          libharfbuzz-dev \
+          libmp3lame-dev \
+          libopus-dev \
+          libvorbis-dev \
+          libwebp-dev \
+          libzmq3-dev \
+          libssh-dev
+
+    - name: Install dependencies (Windows)
+      if: matrix.target == 'windows-x64'
+      run: |
+        choco install -y \
+          nasm \
+          yasm \
+          git \
+          pkgconfiglite \
+          cmake \
+          make \
+          msys2
+
+    - name: Install dependencies (macOS)
+      if: matrix.target == 'macos-x64'
+      run: |
+        brew update
+        brew install \
+          nasm \
+          yasm \
+          pkg-config \
+          cmake \
+          automake \
+          libtool \
+          srt \
+          rtmpdump \
+          x264 \
+          x265 \
+          libvpx \
+          aom \
+          dav1d \
+          libass \
+          freetype \
+          harfbuzz \
+          lame \
+          opus \
+          libvorbis \
+          webp \
+          libssh
+
+    - name: Clone FFmpeg
+      run: |
+        git clone https://git.ffmpeg.org/ffmpeg.git
+        cd ffmpeg
+        git checkout release/6.1  # Stable release
+
+    - name: Configure FFmpeg
+      run: |
+        cd ffmpeg
+        ./configure \
+          --prefix=$(pwd)/../build \
+          --enable-gpl \
+          --enable-version3 \
+          --enable-nonfree \
+          --enable-scte35 \
+          \
+          # Streaming protocols
+          --enable-libsrt \
+          --enable-librtmp \
+          --enable-protocol=http \
+          --enable-protocol=https \
+          --enable-protocol=rtmp \
+          --enable-protocol=rtmps \
+          --enable-protocol=rtmpe \
+          --enable-protocol=rtmpt \
+          --enable-protocol=rtmpte \
+          --enable-protocol=rtp \
+          --enable-protocol=srt \
+          --enable-protocol=udp \
+          --enable-protocol=tcp \
+          --enable-protocol=tls \
+          \
+          # Formats and muxers
+          --enable-muxer=mpegts \
+          --enable-muxer=hls \
+          --enable-muxer=flv \
+          --enable-muxer=mp4 \
+          --enable-muxer=mov \
+          --enable-muxer=mkv \
+          --enable-muxer=rtp \
+          --enable-demuxer=mpegts \
+          --enable-demuxer=hls \
+          --enable-demuxer=flv \
+          --enable-demuxer=rtsp \
+          \
+          # Codecs
+          --enable-libx264 \
+          --enable-libx265 \
+          --enable-libvpx \
+          --enable-libaom \
+          --enable-libdav1d \
+          --enable-libmp3lame \
+          --enable-libopus \
+          --enable-libvorbis \
+          --enable-libfreetype \
+          --enable-libass \
+          --enable-libfribidi \
+          --enable-libharfbuzz \
+          --enable-libwebp \
+          \
+          # Hardware acceleration
+          --enable-vulkan \
+          --enable-opencl \
+          --enable-cuda \
+          --enable-cuvid \
+          --enable-nvenc \
+          --enable-nvdec \
+          \
+          # Filters and processing
+          --enable-filter=scale \
+          --enable-filter=crop \
+          --enable-filter=trim \
+          --enable-filter=overlay \
+          --enable-filter=atempo \
+          --enable-filter=aresample \
+          \
+          # Advanced features
+          --enable-bsf=h264_mp4toannexb \
+          --enable-bsf=hevc_mp4toannexb \
+          --enable-bsf=extract_extradata \
+          \
+          # Optimization
+          --enable-pic \
+          --enable-shared \
+          --enable-static \
+          --enable-small \
+          --enable-runtime-cpudetect \
+          \
+          # Logging and debugging
+          --enable-debug \
+          --enable-extra-warnings \
+          \
+          # Platform specific
+          ${{ matrix.target == 'windows-x64' && '--toolchain=msvc' || '' }} \
+          ${{ matrix.target == 'windows-x64' && '--arch=x86_64' || '' }}
+
+    - name: Build FFmpeg
+      run: |
+        cd ffmpeg
+        make -j$(nproc)
+        make install
+
+    - name: Test build
+      run: |
+        cd build/bin
+        ./ffmpeg -version
+        ./ffmpeg -protocols | grep -E "(srt|rtmp|http)"
+        ./ffmpeg -h muxer=mpegts | grep -i scte
+        ./ffmpeg -formats | grep -E "(hls|mpegts|flv)"
+
+    - name: Package artifacts
+      run: |
+        cd build
+        if [ "$RUNNER_OS" = "Windows" ]; then
+          7z a ffmpeg-streaming-${{ matrix.target }}.7z bin/*
+        else
+          tar -czvf ffmpeg-streaming-${{ matrix.target }}.tar.gz bin/*
+        fi
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ffmpeg-streaming-${{ matrix.target }}
+        path: build/ffmpeg-streaming-${{ matrix.target }}.*
+
+    - name: Create release
+      if: github.event_name == 'workflow_dispatch'
+      uses: softprops/action-gh-release@v1
+      with:
+        files: build/ffmpeg-streaming-*
+        tag_name: streaming-build-${{ github.run_id }}
+        name: FFmpeg Streaming Build
+        body: |
+          FFmpeg built with full streaming support including:
+          - SRT protocol support
+          - RTMP/RTMPS support
+          - HLS muxing/demuxing
+          - SCTE35 support
+          - MPEG-TS broadcasting features
+          - Hardware acceleration
+          
+          Platform: ${{ matrix.target }}
+          Build date: ${{ github.run_number }}
+
+    - name: Verify streaming capabilities
+      run: |
+        cd build/bin
+        echo "=== STREAMING PROTOCOLS ==="
+        ./ffmpeg -protocols | grep -E "(srt|rtmp|http|tcp|udp)"
+        
+        echo "=== FORMAT SUPPORT ==="
+        ./ffmpeg -formats | grep -E "(hls|mpegts|flv|rtsp)"
+        
+        echo "=== SCTE35 SUPPORT ==="
+        ./ffmpeg -h muxer=mpegts | grep -i scte || echo "SCTE35 not found in mpegts muxer"
+        
+        echo "=== VERSION INFO ==="
+        ./ffmpeg -version
