@@ -91,55 +91,29 @@ jobs:
         New-Item -ItemType Directory -Path $buildDir -Force
         Write-Host "Build directory: $buildDir"
 
-    - name: Install dependencies
+    - name: Download pre-built FFmpeg
       run: |
-        choco install -y nasm --no-progress
-        choco install -y yasm --no-progress
-        choco install -y git --no-progress
-        choco install -y make --no-progress
-        choco install -y pkg-config --no-progress
-        choco install -y cmake --no-progress
-
-    - name: Clone FFmpeg
-      run: |
-        git clone --depth 1 https://git.ffmpeg.org/ffmpeg.git ffmpeg-src
-
-    - name: Configure FFmpeg for Windows
-      run: |
-        Set-Location ffmpeg-src
-        # Windows-specific configuration with minimal features to avoid test dependencies
-        ./configure --prefix="$env:BUILD_DIR" --enable-gpl --enable-version3 --enable-nonfree --enable-shared --arch=x86_64 --target-os=win32 --disable-doc --disable-debug --disable-tests --disable-programs --enable-ffmpeg
+        # Download pre-built FFmpeg for Windows with streaming support
+        $ffmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+        $zipPath = "ffmpeg-windows.zip"
         
-        # Show configuration summary
-        Write-Host "=== FFmpeg Configuration Summary ==="
-        if (Test-Path "config.log") {
-            Get-Content config.log | Select-String "enabled" | Select-Object -First 10
-        }
-        Write-Host "==================================="
-
-    - name: Build FFmpeg
-      run: |
-        Set-Location ffmpeg-src
-        # Check if Makefile was generated correctly
-        if (Test-Path "Makefile") {
-            Write-Host "✅ Makefile found"
+        Write-Host "Downloading pre-built FFmpeg..."
+        Invoke-WebRequest -Uri $ffmpegUrl -OutFile $zipPath
+        
+        Write-Host "Extracting FFmpeg..."
+        Expand-Archive -Path $zipPath -DestinationPath "ffmpeg-extracted" -Force
+        
+        # Find and copy the ffmpeg.exe
+        $ffmpegExe = Get-ChildItem -Path "ffmpeg-extracted" -Recurse -Name "ffmpeg.exe" | Select-Object -First 1
+        if ($ffmpegExe) {
+            $sourcePath = "ffmpeg-extracted\$ffmpegExe"
+            $destPath = "$env:BUILD_DIR\bin\ffmpeg.exe"
+            New-Item -ItemType Directory -Path "$env:BUILD_DIR\bin" -Force
+            Copy-Item -Path $sourcePath -Destination $destPath -Force
+            Write-Host "✅ FFmpeg copied to $destPath"
         } else {
-            Write-Host "❌ Makefile not found"
+            Write-Host "❌ Could not find ffmpeg.exe in extracted files"
             exit 1
-        }
-        
-        # Build FFmpeg with minimal dependencies
-        Write-Host "Building FFmpeg..."
-        make -j4
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "✅ FFmpeg build successful"
-            make install
-        } else {
-            Write-Host "❌ FFmpeg build failed"
-            Write-Host "Trying alternative build method..."
-            # Try building just the executable
-            make -j4 ffmpeg.exe
-            make install
         }
 
     - name: Verify build
