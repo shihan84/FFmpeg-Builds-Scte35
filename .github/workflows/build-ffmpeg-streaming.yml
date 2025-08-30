@@ -150,8 +150,15 @@ jobs:
     - name: Install dependencies
       run: |
         brew update
+        # Handle cmake conflict - uninstall if from local tap, then install from core
+        brew list cmake >/dev/null 2>&1 && brew uninstall cmake || true
+        # Install build tools
         brew install nasm yasm pkg-config cmake
+        # Install codec libraries
         brew install x264 lame opus webp
+        # Verify installations
+        echo "Installed packages:"
+        brew list | grep -E "(nasm|yasm|pkg-config|cmake|x264|lame|opus|webp)" || true
 
     - name: Clone FFmpeg
       run: |
@@ -173,6 +180,11 @@ jobs:
           --enable-shared \
           --extra-cflags="-I$(brew --prefix)/include" \
           --extra-ldflags="-L$(brew --prefix)/lib"
+        
+        # Show configuration summary
+        echo "=== FFmpeg Configuration Summary ==="
+        grep -E "(libx264|libmp3lame|libopus|libwebp)" config.log || echo "Some libraries may not be detected"
+        echo "==================================="
 
     - name: Build FFmpeg
       run: |
