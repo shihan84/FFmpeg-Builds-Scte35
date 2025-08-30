@@ -97,15 +97,18 @@ jobs:
         choco install -y yasm --no-progress
         choco install -y git --no-progress
         choco install -y make --no-progress
+        choco install -y pkg-config --no-progress
+        choco install -y cmake --no-progress
 
     - name: Clone FFmpeg
       run: |
         git clone --depth 1 https://git.ffmpeg.org/ffmpeg.git ffmpeg-src
 
-    - name: Configure FFmpeg
+    - name: Configure FFmpeg for Windows
       run: |
         Set-Location ffmpeg-src
-        ./configure --prefix="$env:BUILD_DIR" --enable-gpl --enable-version3 --enable-nonfree
+        # Windows-specific configuration
+        ./configure --prefix="$env:BUILD_DIR" --enable-gpl --enable-version3 --enable-nonfree --enable-shared --arch=x86_64 --target-os=win32
 
     - name: Build FFmpeg
       run: |
@@ -120,6 +123,7 @@ jobs:
           Write-Host "✅ Windows build successful!"
         } else {
           Write-Host "❌ Windows build failed"
+          Write-Host "Build directory contents:"
           Get-ChildItem "$env:BUILD_DIR" -Recurse | ForEach-Object { $_.FullName }
           exit 1
         }
@@ -153,9 +157,10 @@ jobs:
       run: |
         git clone --depth 1 https://git.ffmpeg.org/ffmpeg.git ffmpeg-src
 
-    - name: Configure FFmpeg
+    - name: Configure FFmpeg for macOS
       run: |
         cd ffmpeg-src
+        # macOS-specific configuration with proper library paths
         ./configure \
           --prefix="$BUILD_DIR" \
           --enable-gpl \
@@ -165,7 +170,9 @@ jobs:
           --enable-libmp3lame \
           --enable-libopus \
           --enable-libwebp \
-          --enable-shared
+          --enable-shared \
+          --extra-cflags="-I$(brew --prefix)/include" \
+          --extra-ldflags="-L$(brew --prefix)/lib"
 
     - name: Build FFmpeg
       run: |
@@ -180,7 +187,10 @@ jobs:
           echo "✅ macOS build successful!"
         else
           echo "❌ macOS build failed"
+          echo "Build directory contents:"
           ls -la "$BUILD_DIR/" || true
+          echo "FFmpeg source directory:"
+          ls -la ffmpeg-src/ || true
           exit 1
         fi
 
