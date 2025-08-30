@@ -196,7 +196,7 @@ jobs:
           --enable-static \
           --enable-pic \
           --enable-hardcoded-tables \
-          --enable-avresample \
+          
           --enable-swresample \
           --enable-swscale \
           --enable-postproc \
@@ -561,7 +561,7 @@ jobs:
           --enable-static \
           --enable-pic \
           --enable-hardcoded-tables \
-          --enable-avresample \
+          
           --enable-swresample \
           --enable-swscale \
           --enable-postproc \
