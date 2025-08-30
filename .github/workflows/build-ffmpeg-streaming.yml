@@ -70,7 +70,15 @@ jobs:
           --enable-protocol=tcp \
           --enable-protocol=sctp \
           --enable-filter=insert_scte35 \
-          --enable-filter=remove_scte35
+          --enable-filter=remove_scte35 \
+          --enable-filter=scte35 \
+          --enable-demuxer=scte35 \
+          --enable-parser=scte35
+        
+        # Show configuration summary for SCTE-35
+        echo "=== SCTE-35 Configuration Summary ==="
+        grep -i "scte35" config.log || echo "No SCTE-35 configuration found"
+        echo "====================================="
 
     - name: Build FFmpeg
       run: |
@@ -81,6 +89,9 @@ jobs:
     - name: Verify build
       run: |
         if [ -f "$BUILD_DIR/bin/ffmpeg" ]; then
+          # Set LD_LIBRARY_PATH to find shared libraries
+          export LD_LIBRARY_PATH="$BUILD_DIR/lib:$LD_LIBRARY_PATH"
+          
           "$BUILD_DIR/bin/ffmpeg" -version | head -2
           echo "✅ Linux build successful!"
           
@@ -91,6 +102,8 @@ jobs:
             "$BUILD_DIR/bin/ffmpeg" -filters 2>&1 | grep "scte35"
           else
             echo "⚠️ SCTE-35 filters not found"
+            echo "Available filters:"
+            "$BUILD_DIR/bin/ffmpeg" -filters 2>&1 | head -20
           fi
         else
           echo "❌ Linux build failed"
@@ -119,7 +132,8 @@ jobs:
     - name: Download pre-built FFmpeg
       run: |
         # Download pre-built FFmpeg for Windows with streaming support
-        $ffmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+        # Try different pre-built binaries that might include SCTE-35
+        $ffmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip"
         $zipPath = "ffmpeg-windows.zip"
         
         Write-Host "Downloading pre-built FFmpeg..."
