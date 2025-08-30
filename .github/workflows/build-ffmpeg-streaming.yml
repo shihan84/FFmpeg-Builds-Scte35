@@ -36,9 +36,22 @@ jobs:
           libopus-dev \
           libwebp-dev \
           libssl-dev \
-          libsrt-dev \
           libx265-dev \
           libfdk-aac-dev
+        
+        # Install SRT from source if not available in repositories
+        if ! dpkg -l | grep -q libsrt; then
+          echo "Installing SRT from source..."
+          cd /tmp
+          wget https://github.com/Haivision/srt/archive/refs/tags/v1.5.3.tar.gz
+          tar -xzf v1.5.3.tar.gz
+          cd srt-1.5.3
+          ./configure --prefix=/usr/local
+          make -j$(nproc)
+          sudo make install
+          sudo ldconfig
+          cd /
+        fi
 
     - name: Create build directory
       run: mkdir -p $BUILD_DIR
@@ -167,8 +180,10 @@ jobs:
     - name: Configure FFmpeg with Pierre Le Fevre patch
       run: |
         cd ffmpeg-src
-        ./configure \
-          --prefix="$BUILD_DIR" \
+        
+        # Build configure command with optional libraries
+        CONFIGURE_CMD="./configure \
+          --prefix=\"$BUILD_DIR\" \
           --enable-gpl \
           --enable-version3 \
           --enable-nonfree \
@@ -177,8 +192,6 @@ jobs:
           --enable-libmp3lame \
           --enable-libopus \
           --enable-libwebp \
-          --enable-libsrt \
-          --enable-libfdk-aac \
           --enable-shared \
           --enable-static \
           --enable-pic \
@@ -201,7 +214,6 @@ jobs:
           --enable-protocol=dash \
           --enable-protocol=rtmp \
           --enable-protocol=rtmps \
-          --enable-protocol=srt \
           --enable-protocol=udp \
           --enable-protocol=tcp \
           --enable-protocol=sctp \
@@ -226,12 +238,31 @@ jobs:
           --enable-protocol=unix \
           --enable-protocol=wss \
           --enable-protocol=ws \
-          --extra-cflags="-I/usr/include" \
-          --extra-ldflags="-L/usr/lib" \
-          --extra-version="-Pierre-LeFevre-SCTE35-patch" \
+          --extra-cflags=\"-I/usr/include\" \
+          --extra-ldflags=\"-L/usr/lib\" \
+          --extra-version=\"-Pierre-LeFevre-SCTE35-patch\" \
           --disable-doc \
           --disable-debug \
-          --disable-tests
+          --disable-tests"
+        
+        # Add SRT if available
+        if pkg-config --exists libsrt; then
+          CONFIGURE_CMD="$CONFIGURE_CMD --enable-libsrt --enable-protocol=srt"
+          echo "✅ SRT library found, enabling SRT support"
+        else
+          echo "⚠️ SRT library not found, building without SRT support"
+        fi
+        
+        # Add fdk-aac if available
+        if pkg-config --exists fdk-aac; then
+          CONFIGURE_CMD="$CONFIGURE_CMD --enable-libfdk-aac"
+          echo "✅ fdk-aac library found, enabling fdk-aac support"
+        else
+          echo "⚠️ fdk-aac library not found, building without fdk-aac support"
+        fi
+        
+        # Execute configure
+        eval $CONFIGURE_CMD
 
     - name: Show configuration summary
       run: |
@@ -378,10 +409,14 @@ jobs:
         # Install codec libraries
         brew install x264 lame opus webp
         # Install additional dependencies
-        brew install openssl srt x265 fdk-aac
+        brew install openssl x265
+        # Install SRT if available, otherwise skip
+        brew install srt 2>/dev/null || echo "SRT not available via Homebrew, will build without SRT support"
+        # Install fdk-aac if available, otherwise skip
+        brew install fdk-aac 2>/dev/null || echo "fdk-aac not available via Homebrew, will build without fdk-aac support"
         # Verify installations
         echo "Installed packages:"
-        brew list | grep -E "(nasm|yasm|pkg-config|cmake|x264|lame|opus|webp|openssl|srt|x265|fdk-aac)" || true
+        brew list | grep -E "(nasm|yasm|pkg-config|cmake|x264|lame|opus|webp|openssl|x265)" || true
 
     - name: Create build directory
       run: mkdir -p $BUILD_DIR
@@ -510,8 +545,10 @@ jobs:
     - name: Configure FFmpeg with Pierre Le Fevre patch
       run: |
         cd ffmpeg-src
-        ./configure \
-          --prefix="$BUILD_DIR" \
+        
+        # Build configure command with optional libraries
+        CONFIGURE_CMD="./configure \
+          --prefix=\"$BUILD_DIR\" \
           --enable-gpl \
           --enable-version3 \
           --enable-nonfree \
@@ -520,8 +557,6 @@ jobs:
           --enable-libmp3lame \
           --enable-libopus \
           --enable-libwebp \
-          --enable-libsrt \
-          --enable-libfdk-aac \
           --enable-shared \
           --enable-static \
           --enable-pic \
@@ -544,7 +579,6 @@ jobs:
           --enable-protocol=dash \
           --enable-protocol=rtmp \
           --enable-protocol=rtmps \
-          --enable-protocol=srt \
           --enable-protocol=udp \
           --enable-protocol=tcp \
           --enable-protocol=sctp \
@@ -569,12 +603,31 @@ jobs:
           --enable-protocol=unix \
           --enable-protocol=wss \
           --enable-protocol=ws \
-          --extra-cflags="-I$(brew --prefix)/include" \
-          --extra-ldflags="-L$(brew --prefix)/lib" \
-          --extra-version="-Pierre-LeFevre-SCTE35-patch" \
+          --extra-cflags=\"-I$(brew --prefix)/include\" \
+          --extra-ldflags=\"-L$(brew --prefix)/lib\" \
+          --extra-version=\"-Pierre-LeFevre-SCTE35-patch\" \
           --disable-doc \
           --disable-debug \
-          --disable-tests
+          --disable-tests"
+        
+        # Add SRT if available
+        if pkg-config --exists libsrt; then
+          CONFIGURE_CMD="$CONFIGURE_CMD --enable-libsrt --enable-protocol=srt"
+          echo "✅ SRT library found, enabling SRT support"
+        else
+          echo "⚠️ SRT library not found, building without SRT support"
+        fi
+        
+        # Add fdk-aac if available
+        if pkg-config --exists fdk-aac; then
+          CONFIGURE_CMD="$CONFIGURE_CMD --enable-libfdk-aac"
+          echo "✅ fdk-aac library found, enabling fdk-aac support"
+        else
+          echo "⚠️ fdk-aac library not found, building without fdk-aac support"
+        fi
+        
+        # Execute configure
+        eval $CONFIGURE_CMD
 
     - name: Show configuration summary
       run: |
