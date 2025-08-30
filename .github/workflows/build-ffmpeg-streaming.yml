@@ -1,256 +1,351 @@
 name: Build FFmpeg with Full Streaming Support
 
 on:
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:
   push:
-    branches: [ main ]
+    branches: [ main, develop ]
   schedule:
-    - cron: '0 0 1 * *'  # Monthly rebuild
+    - cron: '0 0 */15 * *'  # Build every 15 days
+
+env:
+  BUILD_RETRIES: 3
+  TIMEOUT_MINUTES: 120
 
 jobs:
   build-ffmpeg:
     strategy:
       matrix:
         target: [linux-x64, windows-x64, macos-x64]
+      max-parallel: 2
+      fail-fast: false
     runs-on: ${{ matrix.target == 'windows-x64' && 'windows-latest' || matrix.target == 'macos-x64' && 'macos-latest' || 'ubuntu-latest' }}
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
 
-    - name: Setup environment
+    - name: Setup build environment
+      id: setup
       run: |
-        echo "Building for ${{ matrix.target }}"
-        mkdir -p build
+        echo "BUILD_DIR=$(pwd)/ffmpeg-build" >> $GITHUB_ENV
+        echo "ARTIFACT_NAME=ffmpeg-streaming-${{ matrix.target }}" >> $GITHUB_ENV
+        mkdir -p "$BUILD_DIR"
+        echo "Build started at: $(date)" >> $BUILD_DIR/build-log.txt
 
-    - name: Install dependencies (Linux)
-      if: matrix.target == 'linux-x64'
+    - name: Install dependencies
+      id: install-deps
+      continue-on-error: false
+      timeout-minutes: 25
       run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          build-essential \
-          nasm \
-          yasm \
-          git \
-          pkg-config \
-          cmake \
-          autoconf \
-          automake \
-          libtool \
-          zlib1g-dev \
-          libssl-dev \
-          libsrt-dev \
-          librtmp-dev \
-          libx264-dev \
-          libx265-dev \
-          libvpx-dev \
-          libaom-dev \
-          libdav1d-dev \
-          libass-dev \
-          libfreetype6-dev \
-          libfribidi-dev \
-          libharfbuzz-dev \
-          libmp3lame-dev \
-          libopus-dev \
-          libvorbis-dev \
-          libwebp-dev \
-          libzmq3-dev \
-          libssh-dev
+        echo "Installing dependencies for ${{ matrix.target }}..."
+        
+        if [ "$RUNNER_OS" = "Linux" ]; then
+          # Ubuntu/Linux dependencies
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            nasm \
+            yasm \
+            git \
+            pkg-config \
+            cmake \
+            autoconf \
+            automake \
+            libtool \
+            zlib1g-dev \
+            libssl-dev \
+            librtmp-dev \
+            libx264-dev \
+            libx265-dev \
+            libvpx-dev \
+            libaom-dev \
+            libdav1d-dev \
+            libass-dev \
+            libfreetype6-dev \
+            libfribidi-dev \
+            libharfbuzz-dev \
+            libmp3lame-dev \
+            libopus-dev \
+            libvorbis-dev \
+            libwebp-dev \
+            libzmq3-dev \
+            libssh-dev \
+            wget \
+            tar \
+            curl
 
-    - name: Install dependencies (Windows)
-      if: matrix.target == 'windows-x64'
-      run: |
-        choco install -y \
-          nasm \
-          yasm \
-          git \
-          pkgconfiglite \
-          cmake \
-          make \
-          msys2
+          # Build and install libsrt from source
+          echo "Building libsrt from source..."
+          SRT_VERSION="1.5.3"
+          wget https://github.com/Haivision/srt/archive/refs/tags/v${SRT_VERSION}.tar.gz -O srt-${SRT_VERSION}.tar.gz
+          tar -xzf srt-${SRT_VERSION}.tar.gz
+          cd srt-${SRT_VERSION}
+          ./configure --prefix=/usr/local --enable-shared --enable-static
+          make -j$(nproc)
+          sudo make install
+          sudo ldconfig
+          cd ..
+          
+        elif [ "$RUNNER_OS" = "Windows" ]; then
+          # Windows dependencies - install packages one by one
+          choco install -y nasm --no-progress
+          choco install -y yasm --no-progress
+          choco install -y git --no-progress
+          choco install -y cmake --no-progress
+          choco install -y make --no-progress
+          choco install -y 7zip --no-progress
+          choco install -y msys2 --no-progress
+          
+        elif [ "$RUNNER_OS" = "macOS" ]; then
+          # macOS dependencies
+          brew update
+          brew install \
+            nasm \
+            yasm \
+            pkg-config \
+            cmake \
+            automake \
+            libtool \
+            srt \
+            rtmpdump \
+            x264 \
+            x265 \
+            libvpx \
+            aom \
+            dav1d \
+            libass \
+            freetype \
+            harfbuzz \
+            lame \
+            opus \
+            libvorbis \
+            webp \
+            libssh
+        fi
 
-    - name: Install dependencies (macOS)
-      if: matrix.target == 'macos-x64'
-      run: |
-        brew update
-        brew install \
-          nasm \
-          yasm \
-          pkg-config \
-          cmake \
-          automake \
-          libtool \
-          srt \
-          rtmpdump \
-          x264 \
-          x265 \
-          libvpx \
-          aom \
-          dav1d \
-          libass \
-          freetype \
-          harfbuzz \
-          lame \
-          opus \
-          libvorbis \
-          webp \
-          libssh
+        echo "deps_status=success" >> $GITHUB_OUTPUT
 
     - name: Clone FFmpeg
+      if: steps.install-deps.outputs.deps_status == 'success'
       run: |
-        git clone https://git.ffmpeg.org/ffmpeg.git
-        cd ffmpeg
-        git checkout release/6.1  # Stable release
+        attempt=1
+        while [ $attempt -le $env:BUILD_RETRIES ]; do
+          echo "Clone attempt $attempt/$env:BUILD_RETRIES"
+          if git clone --depth 1 --branch release/6.1 https://git.ffmpeg.org/ffmpeg.git ffmpeg-src 2>&1 | tee -a "$BUILD_DIR/clone-log.txt"; then
+            echo "FFmpeg cloned successfully"
+            break
+          fi
+          echo "Clone failed, attempt $attempt/$env:BUILD_RETRIES"
+          rm -rf ffmpeg-src
+          sleep $((attempt * 2))
+          attempt=$((attempt + 1))
+        done
+        
+        if [ ! -d "ffmpeg-src" ]; then
+          echo "All clone attempts failed"
+          exit 1
+        fi
 
     - name: Configure FFmpeg
+      if: steps.install-deps.outputs.deps_status == 'success'
+      id: configure
       run: |
-        cd ffmpeg
-        ./configure \
-          --prefix=$(pwd)/../build \
-          --enable-gpl \
-          --enable-version3 \
-          --enable-nonfree \
-          --enable-scte35 \
-          \
-          # Streaming protocols
-          --enable-libsrt \
-          --enable-librtmp \
-          --enable-protocol=http \
-          --enable-protocol=https \
-          --enable-protocol=rtmp \
-          --enable-protocol=rtmps \
-          --enable-protocol=rtmpe \
-          --enable-protocol=rtmpt \
-          --enable-protocol=rtmpte \
-          --enable-protocol=rtp \
-          --enable-protocol=srt \
-          --enable-protocol=udp \
-          --enable-protocol=tcp \
-          --enable-protocol=tls \
-          \
-          # Formats and muxers
-          --enable-muxer=mpegts \
-          --enable-muxer=hls \
-          --enable-muxer=flv \
-          --enable-muxer=mp4 \
-          --enable-muxer=mov \
-          --enable-muxer=mkv \
-          --enable-muxer=rtp \
-          --enable-demuxer=mpegts \
-          --enable-demuxer=hls \
-          --enable-demuxer=flv \
-          --enable-demuxer=rtsp \
-          \
-          # Codecs
-          --enable-libx264 \
-          --enable-libx265 \
-          --enable-libvpx \
-          --enable-libaom \
-          --enable-libdav1d \
-          --enable-libmp3lame \
-          --enable-libopus \
-          --enable-libvorbis \
-          --enable-libfreetype \
-          --enable-libass \
-          --enable-libfribidi \
-          --enable-libharfbuzz \
-          --enable-libwebp \
-          \
-          # Hardware acceleration
-          --enable-vulkan \
-          --enable-opencl \
-          --enable-cuda \
-          --enable-cuvid \
-          --enable-nvenc \
-          --enable-nvdec \
-          \
-          # Filters and processing
-          --enable-filter=scale \
-          --enable-filter=crop \
-          --enable-filter=trim \
-          --enable-filter=overlay \
-          --enable-filter=atempo \
-          --enable-filter=aresample \
-          \
-          # Advanced features
-          --enable-bsf=h264_mp4toannexb \
-          --enable-bsf=hevc_mp4toannexb \
-          --enable-bsf=extract_extradata \
-          \
-          # Optimization
-          --enable-pic \
-          --enable-shared \
-          --enable-static \
-          --enable-small \
-          --enable-runtime-cpudetect \
-          \
-          # Logging and debugging
-          --enable-debug \
-          --enable-extra-warnings \
-          \
-          # Platform specific
-          ${{ matrix.target == 'windows-x64' && '--toolchain=msvc' || '' }} \
-          ${{ matrix.target == 'windows-x64' && '--arch=x86_64' || '' }}
+        cd ffmpeg-src
+        
+        # Set library paths for Linux
+        if [ "$RUNNER_OS" = "Linux" ]; then
+          export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH
+          export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
+        fi
+        
+        # Base configuration
+        BASE_FLAGS="--prefix=$BUILD_DIR --enable-gpl --enable-version3 --enable-nonfree"
+        
+        # Streaming protocols
+        CONFIGURE_FLAGS="$BASE_FLAGS --enable-libsrt --enable-librtmp"
+        
+        # Common codecs and features
+        CONFIGURE_FLAGS="$CONFIGURE_FLAGS --enable-libx264 --enable-libx265 --enable-libmp3lame --enable-libopus"
+        CONFIGURE_FLAGS="$CONFIGURE_FLAGS --enable-libvpx --enable-libaom --enable-libdav1d"
+        CONFIGURE_FLAGS="$CONFIGURE_FLAGS --enable-libass --enable-libfreetype --enable-libfribidi --enable-libharfbuzz"
+        CONFIGURE_FLAGS="$CONFIGURE_FLAGS --enable-libvorbis --enable-libwebp --enable-libzmq --enable-libssh"
+        
+        # Try to enable SCTE35 (may not be available in all versions)
+        CONFIGURE_FLAGS="$CONFIGURE_FLAGS --enable-scte35"
+        
+        # Additional options
+        CONFIGURE_FLAGS="$CONFIGURE_FLAGS --enable-shared --enable-static --enable-pic"
+        CONFIGURE_FLAGS="$CONFIGURE_FLAGS --enable-hardcoded-tables --enable-runtime-cpudetect"
+        
+        echo "Configure flags: $CONFIGURE_FLAGS"
+        
+        # Run configure with error handling
+        if ! ./configure $CONFIGURE_FLAGS 2>&1 | tee -a "$BUILD_DIR/configure-log.txt"; then
+          echo "Configuration failed, trying without SCTE35..."
+          # Remove SCTE35 flag and try again
+          CONFIGURE_FLAGS="${CONFIGURE_FLAGS/--enable-scte35/}"
+          if ! ./configure $CONFIGURE_FLAGS 2>&1 | tee -a "$BUILD_DIR/configure-log.txt"; then
+            echo "Configuration failed completely"
+            exit 1
+          fi
+          echo "scte35_enabled=false" >> $GITHUB_OUTPUT
+        else
+          echo "scte35_enabled=true" >> $GITHUB_OUTPUT
+        fi
+        
+        echo "Configuration completed successfully"
 
     - name: Build FFmpeg
+      if: steps.configure.outcome == 'success'
+      id: build
+      timeout-minutes: ${{ env.TIMEOUT_MINUTES }}
       run: |
-        cd ffmpeg
-        make -j$(nproc)
-        make install
+        cd ffmpeg-src
+        
+        # Build with retry logic
+        attempt=1
+        while [ $attempt -le $env:BUILD_RETRIES ]; do
+          echo "Build attempt $attempt/$env:BUILD_RETRIES"
+          
+          # Use appropriate make command for the platform
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            make -j4 2>&1 | tee -a "$BUILD_DIR/build-log.txt"
+          else
+            make -j$(nproc) 2>&1 | tee -a "$BUILD_DIR/build-log.txt"
+          fi
+          
+          if [ ${PIPESTATUS[0]} -eq 0 ]; then
+            echo "Build successful"
+            break
+          fi
+          
+          echo "Build failed, attempt $attempt/$env:BUILD_RETRIES"
+          if [ $attempt -lt $env:BUILD_RETRIES ]; then
+            make clean
+          fi
+          sleep $((attempt * 5))
+          attempt=$((attempt + 1))
+        done
+        
+        if [ $attempt -gt $env:BUILD_RETRIES ]; then
+          echo "All build attempts failed"
+          exit 1
+        fi
+        
+        # Install
+        if ! make install 2>&1 | tee -a "$BUILD_DIR/install-log.txt"; then
+          echo "Install failed"
+          exit 1
+        fi
 
-    - name: Test build
+    - name: Verify build
+      if: steps.build.outcome == 'success'
       run: |
-        cd build/bin
-        ./ffmpeg -version
-        ./ffmpeg -protocols | grep -E "(srt|rtmp|http)"
-        ./ffmpeg -h muxer=mpegts | grep -i scte
-        ./ffmpeg -formats | grep -E "(hls|mpegts|flv)"
+        echo "=== BUILD VERIFICATION ==="
+        echo "Platform: ${{ matrix.target }}"
+        echo "SCTE35 enabled: ${{ steps.configure.outputs.scte35_enabled }}"
+        
+        # Basic functionality test
+        if "$BUILD_DIR/bin/ffmpeg" -version 2>&1 | tee -a "$BUILD_DIR/verify-log.txt"; then
+          echo "FFmpeg executable works"
+        else
+          echo "FFmpeg executable test failed"
+          exit 1
+        fi
+        
+        # Check streaming protocols
+        echo "=== STREAMING PROTOCOLS ==="
+        "$BUILD_DIR/bin/ffmpeg" -protocols | grep -E "(srt|rtmp|http)" | tee -a "$BUILD_DIR/verify-log.txt"
+        
+        # Check formats
+        echo "=== FORMATS ==="
+        "$BUILD_DIR/bin/ffmpeg" -formats | grep -E "(hls|mpegts|flv)" | head -10 | tee -a "$BUILD_DIR/verify-log.txt"
+        
+        # Check if SCTE35 is available
+        echo "=== SCTE35 CHECK ==="
+        "$BUILD_DIR/bin/ffmpeg" -h muxer=mpegts | grep -i scte 2>&1 | tee -a "$BUILD_DIR/verify-log.txt" || echo "SCTE35 not found in mpegts muxer"
 
     - name: Package artifacts
+      if: success() || failure()
       run: |
-        cd build
+        # Package logs always
+        cd "$BUILD_DIR"
+        
+        # Package binaries if build succeeded
+        if [ -d "bin" ] && [ -f "bin/ffmpeg" ]; then
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            7z a "$ARTIFACT_NAME-bin.7z" bin/*
+          else
+            tar -czvf "$ARTIFACT_NAME-bin.tar.gz" bin/*
+          fi
+        fi
+        
+        # Package all logs
         if [ "$RUNNER_OS" = "Windows" ]; then
-          7z a ffmpeg-streaming-${{ matrix.target }}.7z bin/*
+          7z a "$ARTIFACT_NAME-logs.7z" *.txt
         else
-          tar -czvf ffmpeg-streaming-${{ matrix.target }}.tar.gz bin/*
+          tar -czvf "$ARTIFACT_NAME-logs.tar.gz" *.txt
         fi
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: ffmpeg-streaming-${{ matrix.target }}
-        path: build/ffmpeg-streaming-${{ matrix.target }}.*
+        name: ${{ env.ARTIFACT_NAME }}-${{ job.status }}
+        path: |
+          ${{ env.BUILD_DIR }}/*.7z
+          ${{ env.BUILD_DIR }}/*.tar.gz
+          ${{ env.BUILD_DIR }}/*.txt
+        retention-days: 7
 
-    - name: Create release
-      if: github.event_name == 'workflow_dispatch'
+    - name: Create success release
+      if: success()
       uses: softprops/action-gh-release@v1
       with:
-        files: build/ffmpeg-streaming-*
-        tag_name: streaming-build-${{ github.run_id }}
-        name: FFmpeg Streaming Build
+        files: ${{ env.BUILD_DIR }}/*-bin.*
+        tag_name: success-${{ matrix.target }}-${{ github.run_id }}
+        name: "✅ FFmpeg Streaming Build - ${{ matrix.target }}"
         body: |
-          FFmpeg built with full streaming support including:
-          - SRT protocol support
-          - RTMP/RTMPS support
-          - HLS muxing/demuxing
-          - SCTE35 support
-          - MPEG-TS broadcasting features
-          - Hardware acceleration
-          
+          ✅ Build successful!
           Platform: ${{ matrix.target }}
-          Build date: ${{ github.run_number }}
+          SCTE35: ${{ steps.configure.outputs.scte35_enabled }}
+          Build ID: ${{ github.run_id }}
+          
+          Includes streaming support:
+          - SRT protocol
+          - RTMP/RTMPS
+          - HLS support
+          - SCTE35: ${{ steps.configure.outputs.scte35_enabled }}
 
-    - name: Verify streaming capabilities
-      run: |
-        cd build/bin
-        echo "=== STREAMING PROTOCOLS ==="
-        ./ffmpeg -protocols | grep -E "(srt|rtmp|http|tcp|udp)"
-        
-        echo "=== FORMAT SUPPORT ==="
-        ./ffmpeg -formats | grep -E "(hls|mpegts|flv|rtsp)"
-        
-        echo "=== SCTE35 SUPPORT ==="
-        ./ffmpeg -h muxer=mpegts | grep -i scte || echo "SCTE35 not found in mpegts muxer"
-        
-        echo "=== VERSION INFO ==="
-        ./ffmpeg -version
+  notify-completion:
+    needs: build-ffmpeg
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+    - name: Send completion notification
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const results = ${{ toJSON(needs.build-ffmpeg.result) }};
+          const allSucceeded = Object.values(results).every(result => result === 'success');
+          
+          if (allSucceeded) {
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `🎉 All FFmpeg builds completed successfully!\n\nDownload artifacts: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`
+            });
+          } else {
+            const failedPlatforms = Object.entries(results)
+              .filter(([_, result]) => result !== 'success')
+              .map(([platform]) => platform);
+              
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `⚠️ Build completed with failures on: ${failedPlatforms.join(', ')}\n\nCheck logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`
+            });
+          }
