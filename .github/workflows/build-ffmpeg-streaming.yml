@@ -107,8 +107,8 @@ jobs:
     - name: Configure FFmpeg for Windows
       run: |
         Set-Location ffmpeg-src
-        # Windows-specific configuration with proper paths
-        ./configure --prefix="$env:BUILD_DIR" --enable-gpl --enable-version3 --enable-nonfree --enable-shared --arch=x86_64 --target-os=win32 --disable-doc --disable-debug
+        # Windows-specific configuration with minimal features to avoid test dependencies
+        ./configure --prefix="$env:BUILD_DIR" --enable-gpl --enable-version3 --enable-nonfree --enable-shared --arch=x86_64 --target-os=win32 --disable-doc --disable-debug --disable-tests --disable-programs --enable-ffmpeg
         
         # Show configuration summary
         Write-Host "=== FFmpeg Configuration Summary ==="
@@ -123,15 +123,24 @@ jobs:
         # Check if Makefile was generated correctly
         if (Test-Path "Makefile") {
             Write-Host "✅ Makefile found"
-            Get-Content Makefile | Select-String "tests" | Select-Object -First 5
         } else {
             Write-Host "❌ Makefile not found"
             exit 1
         }
         
-        # Build only the main components, skip tests to avoid path issues
-        make -j4 ffmpeg.exe
-        make install
+        # Build FFmpeg with minimal dependencies
+        Write-Host "Building FFmpeg..."
+        make -j4
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "✅ FFmpeg build successful"
+            make install
+        } else {
+            Write-Host "❌ FFmpeg build failed"
+            Write-Host "Trying alternative build method..."
+            # Try building just the executable
+            make -j4 ffmpeg.exe
+            make install
+        }
 
     - name: Verify build
       run: |
