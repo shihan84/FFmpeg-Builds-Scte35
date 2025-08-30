@@ -54,7 +54,23 @@ jobs:
           --enable-libmp3lame \
           --enable-libopus \
           --enable-libwebp \
-          --enable-shared
+          --enable-shared \
+          --enable-demuxer=mpegts \
+          --enable-parser=mpegts \
+          --enable-muxer=mpegts \
+          --enable-protocol=file \
+          --enable-protocol=http \
+          --enable-protocol=https \
+          --enable-protocol=hls \
+          --enable-protocol=dash \
+          --enable-protocol=rtmp \
+          --enable-protocol=rtmps \
+          --enable-protocol=srt \
+          --enable-protocol=udp \
+          --enable-protocol=tcp \
+          --enable-protocol=sctp \
+          --enable-filter=insert_scte35 \
+          --enable-filter=remove_scte35
 
     - name: Build FFmpeg
       run: |
@@ -67,6 +83,15 @@ jobs:
         if [ -f "$BUILD_DIR/bin/ffmpeg" ]; then
           "$BUILD_DIR/bin/ffmpeg" -version | head -2
           echo "✅ Linux build successful!"
+          
+          # Verify SCTE-35 support
+          echo "Checking SCTE-35 support..."
+          if "$BUILD_DIR/bin/ffmpeg" -filters 2>&1 | grep -q "scte35"; then
+            echo "✅ SCTE-35 filters available"
+            "$BUILD_DIR/bin/ffmpeg" -filters 2>&1 | grep "scte35"
+          else
+            echo "⚠️ SCTE-35 filters not found"
+          fi
         else
           echo "❌ Linux build failed"
           exit 1
@@ -121,6 +146,15 @@ jobs:
         if (Test-Path "$env:BUILD_DIR\bin\ffmpeg.exe") {
           & "$env:BUILD_DIR\bin\ffmpeg.exe" -version | Select-Object -First 2
           Write-Host "✅ Windows build successful!"
+          
+          # Verify SCTE-35 support
+          Write-Host "Checking SCTE-35 support..."
+          $scte35Check = & "$env:BUILD_DIR\bin\ffmpeg.exe" -filters 2>&1 | Select-String "scte35"
+          if ($scte35Check) {
+            Write-Host "✅ SCTE-35 filters available: $scte35Check"
+          } else {
+            Write-Host "⚠️ SCTE-35 filters not found in pre-built binary"
+          }
         } else {
           Write-Host "❌ Windows build failed"
           Write-Host "Build directory contents:"
@@ -178,6 +212,22 @@ jobs:
           --enable-libopus \
           --enable-libwebp \
           --enable-shared \
+          --enable-demuxer=mpegts \
+          --enable-parser=mpegts \
+          --enable-muxer=mpegts \
+          --enable-protocol=file \
+          --enable-protocol=http \
+          --enable-protocol=https \
+          --enable-protocol=hls \
+          --enable-protocol=dash \
+          --enable-protocol=rtmp \
+          --enable-protocol=rtmps \
+          --enable-protocol=srt \
+          --enable-protocol=udp \
+          --enable-protocol=tcp \
+          --enable-protocol=sctp \
+          --enable-filter=insert_scte35 \
+          --enable-filter=remove_scte35 \
           --extra-cflags="-I$(brew --prefix)/include" \
           --extra-ldflags="-L$(brew --prefix)/lib"
         
@@ -197,6 +247,15 @@ jobs:
         if [ -f "$BUILD_DIR/bin/ffmpeg" ]; then
           "$BUILD_DIR/bin/ffmpeg" -version | head -2
           echo "✅ macOS build successful!"
+          
+          # Verify SCTE-35 support
+          echo "Checking SCTE-35 support..."
+          if "$BUILD_DIR/bin/ffmpeg" -filters 2>&1 | grep -q "scte35"; then
+            echo "✅ SCTE-35 filters available"
+            "$BUILD_DIR/bin/ffmpeg" -filters 2>&1 | grep "scte35"
+          else
+            echo "⚠️ SCTE-35 filters not found"
+          fi
         else
           echo "❌ macOS build failed"
           echo "Build directory contents:"
