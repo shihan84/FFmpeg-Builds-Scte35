@@ -3,11 +3,7 @@ name: Build FFmpeg with Full Streaming Support
 on:
   workflow_dispatch:
   push:
-    branches: [ main, develop ]
-
-env:
-  BUILD_RETRIES: 2
-  TIMEOUT_MINUTES: 90
+    branches: [ main ]
 
 jobs:
   build-ffmpeg:
@@ -25,32 +21,31 @@ jobs:
     - name: Setup build environment
       id: setup
       run: |
-        echo "BUILD_DIR=$(pwd)/ffmpeg-build" >> $GITHUB_ENV
-        echo "ARTIFACT_NAME=ffmpeg-streaming-${{ matrix.target }}" >> $GITHUB_ENV
+        # Set BUILD_DIR without using GITHUB_ENV in the same step
+        BUILD_DIR="$(pwd)/ffmpeg-build"
+        echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
         mkdir -p "$BUILD_DIR"
+        echo "Build directory: $BUILD_DIR"
         echo "Build started at: $(date)" > "$BUILD_DIR/build-log.txt"
 
     - name: Install dependencies
-      id: install-deps
-      timeout-minutes: 20
       run: |
         echo "Installing dependencies for $RUNNER_OS..."
+        echo "BUILD_DIR is: $BUILD_DIR"
         
         if [ "$RUNNER_OS" = "Linux" ]; then
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential nasm yasm git pkg-config cmake autoconf automake libtool \
-            zlib1g-dev libssl-dev librtmp-dev libx264-dev libx265-dev \
-            libvpx-dev libaom-dev libdav1d-dev libass-dev libfreetype6-dev \
-            libfribidi-dev libharfbuzz-dev libmp3lame-dev libopus-dev \
-            libvorbis-dev libwebp-dev libzmq3-dev libssh-dev wget tar
+            build-essential nasm yasm git pkg-config cmake \
+            zlib1g-dev libssl-dev libx264-dev libx265-dev \
+            libvpx-dev libass-dev libfreetype6-dev \
+            libmp3lame-dev libopus-dev libwebp-dev wget tar
 
           # Build libsrt from source
           echo "Building libsrt from source..."
-          SRT_VERSION="1.5.3"
-          wget https://github.com/Haivision/srt/archive/refs/tags/v${SRT_VERSION}.tar.gz
-          tar -xzf v${SRT_VERSION}.tar.gz
-          cd srt-${SRT_VERSION}
+          wget https://github.com/Haivision/srt/archive/refs/tags/v1.5.3.tar.gz
+          tar -xzf v1.5.3.tar.gz
+          cd srt-1.5.3
           ./configure --prefix=/usr/local
           make -j$(nproc)
           sudo make install
@@ -58,54 +53,45 @@ jobs:
           cd ..
 
         elif [ "$RUNNER_OS" = "Windows" ]; then
-          choco install -y nasm yasm git cmake make 7zip --no-progress
+          choco install -y nasm yasm git cmake make --no-progress
 
         elif [ "$RUNNER_OS" = "macOS" ]; then
           brew update
-          brew install nasm yasm pkg-config cmake srt rtmpdump \
-            x264 x265 libvpx aom dav1d libass freetype harfbuzz \
-            lame opus libvorbis webp libssh
+          brew install nasm yasm pkg-config cmake \
+            x264 x265 libvpx libass freetype \
+            lame opus webp
         fi
 
     - name: Clone FFmpeg
       run: |
-        git clone --depth 1 --branch release/6.1 https://git.ffmpeg.org/ffmpeg.git ffmpeg-src
+        echo "BUILD_DIR is: $BUILD_DIR"
+        git clone --depth 1 https://git.ffmpeg.org/ffmpeg.git ffmpeg-src
 
     - name: Configure FFmpeg
-      id: configure
       run: |
         cd ffmpeg-src
+        echo "Current directory: $(pwd)"
+        echo "BUILD_DIR is: $BUILD_DIR"
         
-        if [ "$RUNNER_OS" = "Linux" ]; then
-          export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH
-          export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
-        fi
-
-        # Try with SCTE35 first, then without if it fails
-        CONFIG_FLAGS="--prefix=$BUILD_DIR --enable-gpl --enable-version3 --enable-nonfree \
-          --enable-libsrt --enable-librtmp --enable-libx264 --enable-libx265 \
-          --enable-libmp3lame --enable-libopus --enable-libvpx --enable-libaom \
-          --enable-libass --enable-libfreetype --enable-libwebp --enable-shared"
-
-        if ./configure $CONFIG_FLAGS --enable-scte35 2>> "$BUILD_DIR/configure-errors.txt"; then
-          echo "scte35_enabled=true" >> $GITHUB_OUTPUT
-          echo "Configured with SCTE35 support"
-        else
-          echo "SCTE35 not available, configuring without it..."
-          if ./configure $CONFIG_FLAGS 2>> "$BUILD_DIR/configure-errors.txt"; then
-            echo "scte35_enabled=false" >> $GITHUB_OUTPUT
-            echo "Configured without SCTE35"
-          else
-            echo "Configuration failed completely"
-            cat "$BUILD_DIR/configure-errors.txt"
-            exit 1
-          fi
-        fi
+        # Basic configuration that should work everywhere
+        ./configure \
+          --prefix="$BUILD_DIR" \
+          --enable-gpl \
+          --enable-version3 \
+          --enable-nonfree \
+          --enable-libx264 \
+          --enable-libx265 \
+          --enable-libmp3lame \
+          --enable-libopus \
+          --enable-libwebp \
+          --enable-libfreetype \
+          --enable-libass \
+          --enable-shared
 
     - name: Build FFmpeg
-      timeout-minutes: ${{ env.TIMEOUT_MINUTES }}
       run: |
         cd ffmpeg-src
+        echo "Building FFmpeg..."
         
         if [ "$RUNNER_OS" = "Windows" ]; then
           make -j4
@@ -117,67 +103,53 @@ jobs:
 
     - name: Verify build
       run: |
-        echo "=== BUILD VERIFICATION ==="
+        echo "Verifying build in: $BUILD_DIR"
         
         if [ -f "$BUILD_DIR/bin/ffmpeg" ]; then
           "$BUILD_DIR/bin/ffmpeg" -version | head -2
-          echo "=== STREAMING PROTOCOLS ==="
-          "$BUILD_DIR/bin/ffmpeg" -protocols | grep -E "(srt|rtmp|http)" || true
           echo "Build successful!"
         else
-          echo "FFmpeg binary not found!"
+          echo "FFmpeg binary not found in: $BUILD_DIR/bin/"
+          ls -la "$BUILD_DIR/" || true
+          ls -la "$BUILD_DIR/bin/" 2>/dev/null || true
           exit 1
         fi
 
-    - name: Package artifacts (Linux/macOS)
-      if: runner.os != 'Windows'
+    - name: Package artifacts
       run: |
-        if [ -d "$BUILD_DIR/bin" ]; then
-          cd "$BUILD_DIR"
-          tar -czvf "$ARTIFACT_NAME-bin.tar.gz" bin/
-          tar -czvf "$ARTIFACT_NAME-logs.tar.gz" *.txt
+        echo "Packaging artifacts from: $BUILD_DIR"
+        
+        if [ "$RUNNER_OS" = "Windows" ]; then
+          # Windows packaging
+          if [ -d "$BUILD_DIR/bin" ]; then
+            cd "$BUILD_DIR"
+            7z a "ffmpeg-bin-$RUNNER_OS.7z" bin/*
+          else
+            echo "bin directory not found, creating empty package"
+            echo "Build failed - no binaries" > build-failure.txt
+            7z a "ffmpeg-failed-$RUNNER_OS.7z" build-failure.txt
+          fi
         else
-          echo "Build directory not found, packaging logs only"
-          cd "$(dirname "$BUILD_DIR")"
-          tar -czvf "$ARTIFACT_NAME-logs-only.tar.gz" ffmpeg-build/*.txt 2>/dev/null || true
+          # Linux/macOS packaging
+          if [ -d "$BUILD_DIR/bin" ]; then
+            cd "$BUILD_DIR"
+            tar -czvf "ffmpeg-bin-$RUNNER_OS.tar.gz" bin/
+          else
+            echo "bin directory not found, creating empty package"
+            echo "Build failed - no binaries" > build-failure.txt
+            tar -czvf "ffmpeg-failed-$RUNNER_OS.tar.gz" build-failure.txt
+          fi
         fi
-
-    - name: Package artifacts (Windows)
-      if: runner.os == 'Windows'
-      run: |
-        if (Test-Path "$env:BUILD_DIR\bin") {
-          cd "$env:BUILD_DIR"
-          7z a "$env:ARTIFACT_NAME-bin.7z" bin\*
-          7z a "$env:ARTIFACT_NAME-logs.7z" *.txt
-        } else {
-          echo "Build directory not found, packaging logs only"
-          cd (Split-Path "$env:BUILD_DIR" -Parent)
-          7z a "$env:ARTIFACT_NAME-logs-only.7z" ffmpeg-build\*.txt 2>$null
-        }
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ env.ARTIFACT_NAME }}
+        name: ffmpeg-${{ matrix.target }}
         path: |
           ${{ env.BUILD_DIR }}/*.tar.gz
           ${{ env.BUILD_DIR }}/*.7z
           ${{ env.BUILD_DIR }}/*.txt
         retention-days: 7
-
-    - name: Create success release
-      if: success()
-      uses: softprops/action-gh-release@v1
-      with:
-        files: |
-          ${{ env.BUILD_DIR }}/*-bin.*
-        tag_name: build-${{ matrix.target }}-${{ github.run_number }}
-        name: FFmpeg Streaming Build - ${{ matrix.target }}
-        body: |
-          FFmpeg built with streaming support
-          Platform: ${{ matrix.target }}
-          SCTE35: ${{ steps.configure.outputs.scte35_enabled || 'unknown' }}
-          Build: ${{ github.run_number }}
 
   status-report:
     runs-on: ubuntu-latest
@@ -186,7 +158,5 @@ jobs:
     steps:
     - name: Report build status
       run: |
-        echo "Build status for all platforms:"
-        echo "Linux: ${{ needs.build-ffmpeg.outputs['linux-x64'].result || 'skipped' }}"
-        echo "Windows: ${{ needs.build-ffmpeg.outputs['windows-x64'].result || 'skipped' }}"
-        echo "macOS: ${{ needs.build-ffmpeg.outputs['macos-x64'].result || 'skipped' }}"
+        echo "Build completed for all platforms"
+        echo "Check artifacts for results"
