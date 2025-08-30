@@ -342,48 +342,95 @@ jobs:
     - name: Download pre-built FFmpeg
       run: |
         # Note: Pierre Le Fevre's SCTE-35 patch is not available as pre-built Windows binary
-        # Using standard FFmpeg build for Windows
-        $ffmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip"
+        # Using standard FFmpeg build for Windows with better MPEG-TS support
+        $ffmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
         $zipPath = "ffmpeg-windows.zip"
         
         Write-Host "Downloading pre-built FFmpeg (Windows Pierre Le Fevre patch not available)..."
-        Invoke-WebRequest -Uri $ffmpegUrl -OutFile $zipPath
+        try {
+            Invoke-WebRequest -Uri $ffmpegUrl -OutFile $zipPath -UseBasicParsing
+            Write-Host "✅ Download successful"
+        } catch {
+            Write-Host "❌ Download failed, trying alternative URL..."
+            $ffmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip"
+            Invoke-WebRequest -Uri $ffmpegUrl -OutFile $zipPath -UseBasicParsing
+        }
         
         Write-Host "Extracting FFmpeg..."
         Expand-Archive -Path $zipPath -DestinationPath "ffmpeg-extracted" -Force
         
-        # Find and copy the ffmpeg.exe
+        # Find and copy the ffmpeg.exe and related files
         $ffmpegExe = Get-ChildItem -Path "ffmpeg-extracted" -Recurse -Name "ffmpeg.exe" | Select-Object -First 1
         if ($ffmpegExe) {
-            $sourcePath = "ffmpeg-extracted\$ffmpegExe"
-            $destPath = "$env:BUILD_DIR\bin\ffmpeg.exe"
-            New-Item -ItemType Directory -Path "$env:BUILD_DIR\bin" -Force
-            Copy-Item -Path $sourcePath -Destination $destPath -Force
-            Write-Host "✅ FFmpeg copied to $destPath"
+            $sourceDir = Split-Path "ffmpeg-extracted\$ffmpegExe"
+            $destDir = "$env:BUILD_DIR\bin"
+            New-Item -ItemType Directory -Path $destDir -Force
+            
+            # Copy all files from the source directory
+            Copy-Item -Path "$sourceDir\*" -Destination $destDir -Force -Recurse
+            Write-Host "✅ FFmpeg files copied to $destDir"
         } else {
             Write-Host "❌ Could not find ffmpeg.exe in extracted files"
+            Write-Host "Extracted directory contents:"
+            Get-ChildItem -Path "ffmpeg-extracted" -Recurse | Select-Object Name, FullName
             exit 1
         }
 
     - name: Verify Windows build
       run: |
-        if (Test-Path "$env:BUILD_DIR\bin\ffmpeg.exe") {
-          Write-Host "=== FFmpeg Version ==="
-          & "$env:BUILD_DIR\bin\ffmpeg.exe" -version | Select-Object -First 2
-          
-          Write-Host "=== MPEG-TS Support ==="
-          & "$env:BUILD_DIR\bin\ffmpeg.exe" -formats 2>&1 | Select-String "mpegts" || Write-Host "MPEG-TS not found in formats"
-          & "$env:BUILD_DIR\bin\ffmpeg.exe" -muxers 2>&1 | Select-String "mpegts" || Write-Host "MPEG-TS muxer not found"
-          & "$env:BUILD_DIR\bin\ffmpeg.exe" -demuxers 2>&1 | Select-String "mpegts" || Write-Host "MPEG-TS demuxer not found"
-          
-          Write-Host "=== SCTE-35 Support (Limited) ==="
-          Write-Host "⚠️ Windows build uses standard FFmpeg (Pierre Le Fevre patch not available)"
-          Write-Host "⚠️ SCTE-35 streams may appear as 'bin_data' in this build"
-          Write-Host "💡 Use Linux build for Pierre Le Fevre SCTE-35 patch support"
-          
-          Write-Host "✅ Windows build successful!"
-        } else {
-          Write-Host "❌ Windows build failed"
+        try {
+          if (Test-Path "$env:BUILD_DIR\bin\ffmpeg.exe") {
+            Write-Host "=== FFmpeg Version ==="
+            $version = & "$env:BUILD_DIR\bin\ffmpeg.exe" -version 2>&1 | Select-Object -First 2
+            Write-Host $version
+            
+            Write-Host "=== MPEG-TS Support ==="
+            $formats = & "$env:BUILD_DIR\bin\ffmpeg.exe" -formats 2>&1
+            if ($formats -match "mpegts") {
+              Write-Host "✅ MPEG-TS format supported"
+            } else {
+              Write-Host "⚠️ MPEG-TS not found in formats"
+            }
+            
+            $muxers = & "$env:BUILD_DIR\bin\ffmpeg.exe" -muxers 2>&1
+            if ($muxers -match "mpegts") {
+              Write-Host "✅ MPEG-TS muxer supported"
+            } else {
+              Write-Host "⚠️ MPEG-TS muxer not found"
+            }
+            
+            $demuxers = & "$env:BUILD_DIR\bin\ffmpeg.exe" -demuxers 2>&1
+            if ($demuxers -match "mpegts") {
+              Write-Host "✅ MPEG-TS demuxer supported"
+            } else {
+              Write-Host "⚠️ MPEG-TS demuxer not found"
+            }
+            
+            Write-Host "=== SCTE-35 Support (Limited) ==="
+            Write-Host "⚠️ Windows build uses standard FFmpeg (Pierre Le Fevre patch not available)"
+            Write-Host "⚠️ SCTE-35 streams may appear as 'bin_data' in this build"
+            Write-Host "💡 Use Linux build for Pierre Le Fevre SCTE-35 patch support"
+            
+            Write-Host "=== Build Directory Contents ==="
+            Get-ChildItem -Path "$env:BUILD_DIR\bin" | Select-Object Name, Length
+            
+            Write-Host "✅ Windows build successful!"
+          } else {
+            Write-Host "❌ Windows build failed - ffmpeg.exe not found"
+            Write-Host "Build directory contents:"
+            if (Test-Path $env:BUILD_DIR) {
+              Get-ChildItem -Path $env:BUILD_DIR -Recurse | Select-Object Name, FullName
+            } else {
+              Write-Host "Build directory does not exist"
+            }
+            exit 1
+          }
+        } catch {
+          Write-Host "❌ Error during verification: $($_.Exception.Message)"
+          Write-Host "Build directory contents:"
+          if (Test-Path $env:BUILD_DIR) {
+            Get-ChildItem -Path $env:BUILD_DIR -Recurse | Select-Object Name, FullName
+          }
           exit 1
         }
 
