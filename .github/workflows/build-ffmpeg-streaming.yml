@@ -16,10 +16,12 @@ jobs:
         
         # Extract the archive
         mkdir -p ffmpeg
-        tar -xf ffmpeg.tar.xz -C ffmpeg --strip-components=1
+        tar -xf ffmpeg.tar.xz -C ffmpeg
         
-        # Add to PATH
-        echo "$(pwd)/ffmpeg/bin" >> $GITHUB_PATH
+        # Find the bin directory and add to PATH
+        BIN_DIR=$(find ffmpeg -type d -name bin | head -n1)
+        echo "FFmpeg bin directory: $BIN_DIR"
+        echo "$BIN_DIR" >> $GITHUB_PATH
         
         # Verify installation
         ffmpeg -version
@@ -28,18 +30,18 @@ jobs:
     - name: Verify SCTE-35 Support
       run: |
         echo "=== Checking FFmpeg build configuration ==="
-        ffmpeg -buildconf | grep -E "scte|mpegts"
+        ffmpeg -buildconf | grep -E "scte|mpegts" || echo "No SCTE/MPEG-TS in buildconf"
         
         echo "=== Checking available muxers ==="
-        ffmpeg -muxers | grep mpegts
+        ffmpeg -muxers | grep mpegts || echo "MPEG-TS muxer not found"
         
         echo "=== Checking available demuxers ==="
-        ffmpeg -demuxers | grep mpegts
+        ffmpeg -demuxers | grep mpegts || echo "MPEG-TS demuxer not found"
         
         echo "=== Checking SCTE-35 components ==="
-        ffmpeg -parsers | grep scte35
-        ffmpeg -decoders | grep scte_35
-        ffmpeg -protocols | grep -E "tcp|udp"
+        ffmpeg -parsers | grep scte35 || echo "SCTE-35 parser not found"
+        ffmpeg -decoders | grep scte_35 || echo "SCTE-35 decoder not found"
+        ffmpeg -protocols | grep -E "tcp|udp" || echo "Network protocols not found"
 
     - name: Create Test Video with SCTE-35
       run: |
@@ -83,13 +85,13 @@ jobs:
     - name: Analyze SCTE-35 Data
       run: |
         # Show SCTE-35 packet information
-        ffprobe -show_data -show_packets -select_streams d test_video.ts | grep -A 10 -B 5 scte35
+        ffprobe -show_data -show_packets -select_streams d test_video.ts | grep -A 10 -B 5 scte35 || echo "No SCTE-35 packets found"
         
         # Display SCTE-35 section information
-        ffprobe -show_data -show_frames -select_streams d test_video.ts | grep -A 10 -B 5 scte35
+        ffprobe -show_data -show_frames -select_streams d test_video.ts | grep -A 10 -B 5 scte35 || echo "No SCTE-35 frames found"
 
     - name: Upload Test Artifacts
-      uses: actions/upload-artifact@v4  # Updated to v4
+      uses: actions/upload-artifact@v4
       with:
         name: scte35-test-output
         path: |
@@ -107,10 +109,10 @@ jobs:
         echo "- JSON representation: $(ls -lh scte35_cues.json | awk '{print $5}')" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "### Verification" >> $GITHUB_STEP_SUMMARY
-        echo "- ✅ MPEG-TS muxer available" >> $GITHUB_STEP_SUMMARY
-        echo "- ✅ SCTE-35 parser enabled" >> $GITHUB_STEP_SUMMARY
-        echo "- ✅ SCTE-35 decoder enabled" >> $GITHUB_STEP_SUMMARY
-        echo "- ✅ Network protocols supported" >> $GITHUB_STEP_SUMMARY
+        ffmpeg -muxers | grep -q mpegts && echo "- ✅ MPEG-TS muxer available" >> $GITHUB_STEP_SUMMARY || echo "- ❌ MPEG-TS muxer not found" >> $GITHUB_STEP_SUMMARY
+        ffmpeg -parsers | grep -q scte35 && echo "- ✅ SCTE-35 parser enabled" >> $GITHUB_STEP_SUMMARY || echo "- ❌ SCTE-35 parser not found" >> $GITHUB_STEP_SUMMARY
+        ffmpeg -decoders | grep -q scte_35 && echo "- ✅ SCTE-35 decoder enabled" >> $GITHUB_STEP_SUMMARY || echo "- ❌ SCTE-35 decoder not found" >> $GITHUB_STEP_SUMMARY
+        ffmpeg -protocols | grep -q tcp && echo "- ✅ Network protocols supported" >> $GITHUB_STEP_SUMMARY || echo "- ❌ Network protocols not found" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
         echo "1. Download artifacts to inspect SCTE-35 data" >> $GITHUB_STEP_SUMMARY
