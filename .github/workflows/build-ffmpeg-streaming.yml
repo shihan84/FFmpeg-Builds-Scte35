@@ -89,7 +89,7 @@ jobs:
         ffprobe -show_data -show_frames -select_streams d test_video.ts | grep -A 10 -B 5 scte35
 
     - name: Upload Test Artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4  # Updated to v4
       with:
         name: scte35-test-output
         path: |
