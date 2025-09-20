@@ -1,0 +1,120 @@
+name: FFmpeg SCTE-35 Workflow
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  ffmpeg-scte35:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download FFmpeg Build
+      run: |
+        # Download latest FFmpeg build with SCTE-35 support
+        curl -L -o ffmpeg.tar.xz https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz
+        
+        # Extract the archive
+        mkdir -p ffmpeg
+        tar -xf ffmpeg.tar.xz -C ffmpeg
+        
+        # Find the bin directory and add to PATH
+        BIN_DIR=$(find ffmpeg -type d -name bin | head -n1)
+        echo "FFmpeg bin directory: $BIN_DIR"
+        echo "$BIN_DIR" >> $GITHUB_PATH
+        
+        # Verify installation
+        ffmpeg -version
+        ffprobe -version
+
+    - name: Verify SCTE-35 Support
+      run: |
+        echo "=== Checking FFmpeg build configuration ==="
+        ffmpeg -buildconf | grep -E "scte|mpegts" || echo "No SCTE/MPEG-TS in buildconf"
+        
+        echo "=== Checking available muxers ==="
+        ffmpeg -muxers | grep mpegts || echo "MPEG-TS muxer not found"
+        
+        echo "=== Checking available demuxers ==="
+        ffmpeg -demuxers | grep mpegts || echo "MPEG-TS demuxer not found"
+        
+        echo "=== Checking SCTE-35 components ==="
+        ffmpeg -parsers | grep scte35 || echo "SCTE-35 parser not found"
+        ffmpeg -decoders | grep scte_35 || echo "SCTE-35 decoder not found"
+        ffmpeg -protocols | grep -E "tcp|udp" || echo "Network protocols not found"
+
+    - name: Create Test Video with SCTE-35
+      run: |
+        # Generate test video with embedded SCTE-35 cues
+        ffmpeg -f lavfi -i testsrc2=duration=10:size=640x360:rate=30 \
+               -f lavfi -i sine=frequency=1000:duration=10 \
+               -c:v libx264 -preset veryfast -crf 23 \
+               -c:a aac -b:a 128k \
+               -f mpegts \
+               -mpegts_flags initial_discontinuity \
+               -metadata:s:a:0 language=eng \
+               -scte35 127.0.0.1:9000 \
+               test_video.ts
+        
+        # Verify file creation
+        ls -la test_video.ts
+        ffprobe -show_format -show_streams test_video.ts
+
+    - name: Extract SCTE-35 Cues
+      run: |
+        # Extract SCTE-35 cues to binary file
+        ffmpeg -i test_video.ts \
+               -c copy \
+               -map data-re \
+               -f data \
+               -bsf:s scte35_extract \
+               scte35_cues.bin
+        
+        # Extract SCTE-35 cues to JSON
+        ffmpeg -i test_video.ts \
+               -c copy \
+               -map data-re \
+               -f data \
+               -bsf:s scte35_to_json \
+               scte35_cues.json
+        
+        # Verify extraction
+        ls -la scte35_cues.bin scte35_cues.json
+        head -20 scte35_cues.json
+
+    - name: Analyze SCTE-35 Data
+      run: |
+        # Show SCTE-35 packet information
+        ffprobe -show_data -show_packets -select_streams d test_video.ts | grep -A 10 -B 5 scte35 || echo "No SCTE-35 packets found"
+        
+        # Display SCTE-35 section information
+        ffprobe -show_data -show_frames -select_streams d test_video.ts | grep -A 10 -B 5 scte35 || echo "No SCTE-35 frames found"
+
+    - name: Upload Test Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: scte35-test-output
+        path: |
+          test_video.ts
+          scte35_cues.bin
+          scte35_cues.json
+        retention-days: 30
+
+    - name: Create SCTE-35 Summary
+      run: |
+        echo "## SCTE-35 Test Summary" >> $GITHUB_STEP_SUMMARY
+        echo "- FFmpeg version: $(ffmpeg -version | head -n1)" >> $GITHUB_STEP_SUMMARY
+        echo "- Test video created: $(ls -lh test_video.ts | awk '{print $5}')" >> $GITHUB_STEP_SUMMARY
+        echo "- SCTE-35 cues extracted: $(ls -lh scte35_cues.bin | awk '{print $5}')" >> $GITHUB_STEP_SUMMARY
+        echo "- JSON representation: $(ls -lh scte35_cues.json | awk '{print $5}')" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Verification" >> $GITHUB_STEP_SUMMARY
+        ffmpeg -muxers | grep -q mpegts && echo "- ✅ MPEG-TS muxer available" >> $GITHUB_STEP_SUMMARY || echo "- ❌ MPEG-TS muxer not found" >> $GITHUB_STEP_SUMMARY
+        ffmpeg -parsers | grep -q scte35 && echo "- ✅ SCTE-35 parser enabled" >> $GITHUB_STEP_SUMMARY || echo "- ❌ SCTE-35 parser not found" >> $GITHUB_STEP_SUMMARY
+        ffmpeg -decoders | grep -q scte_35 && echo "- ✅ SCTE-35 decoder enabled" >> $GITHUB_STEP_SUMMARY || echo "- ❌ SCTE-35 decoder not found" >> $GITHUB_STEP_SUMMARY
+        ffmpeg -protocols | grep -q tcp && echo "- ✅ Network protocols supported" >> $GITHUB_STEP_SUMMARY || echo "- ❌ Network protocols not found" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
+        echo "1. Download artifacts to inspect SCTE-35 data" >> $GITHUB_STEP_SUMMARY
+        echo "2. Use futzu's SCTE-35 tools for advanced processing" >> $GITHUB_STEP_SUMMARY
+        echo "3. Integrate with your broadcast workflow" >> $GITHUB_STEP_SUMMARY

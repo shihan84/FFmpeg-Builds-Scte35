@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # FFmpeg Builds with SCTE-35 Support
 
 Automated builds of FFmpeg with comprehensive SCTE-35 support for professional broadcasting and streaming applications.
@@ -105,3 +106,28 @@ This build incorporates SCTE-35 patches from the FFmpeg development community:
 
 ## License:
 This project builds FFmpeg with GPL v2+ license. All patches are contributed back to the FFmpeg project.
+=======
+# FFmpeg Streaming Build
+
+Automated builds of FFmpeg with full streaming support:
+
+## Features Included:
+- ✅ SRT protocol (libsrt)
+- ✅ RTMP/RTMPS (librtmp) 
+- ✅ HLS muxing/demuxing
+- ✅ SCTE35 support
+- ✅ MPEG-TS broadcasting
+- ✅ Hardware acceleration (CUDA, NVENC)
+- ✅ All major codecs
+
+## Usage:
+1. Go to Actions tab
+2. Run "Build FFmpeg with Full Streaming Support" workflow
+3. Download artifacts from completed run
+4. Extract and use ffmpeg binary
+
+## Verification:
+```bash
+./ffmpeg -protocols | grep srt
+./ffmpeg -h muxer=mpegts | grep -i scte
+>>>>>>> 0ced8830a07c24e22b9ac7caf61cd809f1b38a6e
