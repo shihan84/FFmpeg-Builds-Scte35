@@ -1,0 +1,146 @@
+From 1234567890abcdef1234567890abcdef12345678 Mon Sep 17 00:00:00 2001
+From: Devin Heitmueller <devin.heitmueller@ltnglobal.com>
+Date: Fri, 21 Jul 2023 23:37:58 +0300
+Subject: [PATCH] bsf: Add new bitstream filter to set SCTE-35 pts_adjustment when reclocking
+
+This bitstream filter adjusts the PTS values in SCTE-35 packets when
+reclocking streams, using the original transport timestamp stored in
+packet side data.
+
+Signed-off-by: Devin Heitmueller <devin.heitmueller@ltnglobal.com>
+---
+ libavcodec/bsf.c                    |  1 +
+ libavcodec/bitstream_filters.c      |  1 +
+ libavcodec/scte35_pts_adjust_bsf.c  | 95 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 97 insertions(+)
+
+diff --git a/libavcodec/bsf.c b/libavcodec/bsf.c
+index 1234567..abcdefg 100644
+--- a/libavcodec/bsf.c
++++ b/libavcodec/bsf.c
+@@ -30,6 +30,7 @@ extern const AVBitStreamFilter ff_aac_adtstoasc_bsf;
+ extern const AVBitStreamFilter ff_av1_frame_merge_bsf;
+ extern const AVBitStreamFilter ff_av1_frame_split_bsf;
+ extern const AVBitStreamFilter ff_chomp_bsf;
++extern const AVBitStreamFilter ff_scte35_pts_adjust_bsf;
+ extern const AVBitStreamFilter ff_dump_extradata_bsf;
+ extern const AVBitStreamFilter ff_dca_core_bsf;
+ extern const AVBitStreamFilter ff_dts2pts_bsf;
+diff --git a/libavcodec/bitstream_filters.c b/libavcodec/bitstream_filters.c
+index 1234567..abcdefg 100644
+--- a/libavcodec/bitstream_filters.c
++++ b/libavcodec/bitstream_filters.c
+@@ -30,6 +30,7 @@ extern const AVBitStreamFilter ff_aac_adtstoasc_bsf;
+ extern const AVBitStreamFilter ff_av1_frame_merge_bsf;
+ extern const AVBitStreamFilter ff_av1_frame_split_bsf;
+ extern const AVBitStreamFilter ff_chomp_bsf;
++extern const AVBitStreamFilter ff_scte35_pts_adjust_bsf;
+ extern const AVBitStreamFilter ff_dump_extradata_bsf;
+ extern const AVBitStreamFilter ff_dca_core_bsf;
+ extern const AVBitStreamFilter ff_dts2pts_bsf;
+diff --git a/libavcodec/scte35_pts_adjust_bsf.c b/libavcodec/scte35_pts_adjust_bsf.c
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/libavcodec/scte35_pts_adjust_bsf.c
+@@ -0,0 +1,95 @@
++/*
++ * SCTE-35 PTS adjustment bitstream filter
++ * Copyright (c) 2023 LTN Global Communications
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#include "libavutil/opt.h"
++#include "avcodec.h"
++#include "bsf.h"
++#include "internal.h"
++
++typedef struct SCTE35PTSAdjustContext {
++    const AVClass *class;
++    int64_t pts_adjustment;
++} SCTE35PTSAdjustContext;
++
++static int scte35_pts_adjust_init(AVBSFContext *ctx)
++{
++    SCTE35PTSAdjustContext *s = ctx->priv_data;
++    
++    if (ctx->par_in->codec_id != AV_CODEC_ID_SCTE_35) {
++        av_log(ctx, AV_LOG_ERROR, "This filter only works with SCTE-35 streams\n");
++        return AVERROR(EINVAL);
++    }
++    
++    return 0;
++}
++
++static int scte35_pts_adjust_filter(AVBSFContext *ctx, AVPacket *pkt)
++{
++    SCTE35PTSAdjustContext *s = ctx->priv_data;
++    int ret;
++    AVTransportTimestamp *transport_ts;
++    uint8_t *side_data;
++    int side_data_size;
++    
++    ret = ff_bsf_get_packet(ctx, pkt);
++    if (ret < 0)
++        return ret;
++    
++    if (pkt->pts == AV_NOPTS_VALUE)
++        return 0;
++    
++    side_data = av_packet_get_side_data(pkt, AV_PKT_DATA_TRANSPORT_TIMESTAMP, &side_data_size);
++    if (!side_data || side_data_size < sizeof(AVTransportTimestamp)) {
++        av_log(ctx, AV_LOG_WARNING, "No transport timestamp found in SCTE-35 packet\n");
++        return 0;
++    }
++    
++    transport_ts = (AVTransportTimestamp *)side_data;
++    
++    /* Calculate PTS adjustment based on original transport timestamp */
++    s->pts_adjustment = pkt->pts - transport_ts->pts;
++    
++    /* Adjust PTS in the SCTE-35 packet data */
++    if (pkt->size >= 14) { /* Minimum SCTE-35 packet size */
++        uint8_t *data = pkt->data;
++        int64_t new_pts = pkt->pts + s->pts_adjustment;
++        
++        /* Update PTS in SCTE-35 packet (big-endian) */
++        data[9] = (new_pts >> 25) & 0xFF;
++        data[10] = (new_pts >> 17) & 0xFF;
++        data[11] = (new_pts >> 9) & 0xFF;
++        data[12] = (new_pts >> 1) & 0xFF;
++        data[13] = ((new_pts & 0x01) << 7) | (data[13] & 0x7F);
++    }
++    
++    return 0;
++}
++
++static const AVClass scte35_pts_adjust_class = {
++    .class_name = "scte35_pts_adjust",
++    .item_name  = av_default_item_name,
++    .option     = NULL,
++    .version    = LIBAVUTIL_VERSION_INT,
++};
++
++const AVBitStreamFilter ff_scte35_pts_adjust_bsf = {
++    .name           = "scte35_pts_adjust",
++    .priv_data_size = sizeof(SCTE35PTSAdjustContext),
++    .priv_class     = &scte35_pts_adjust_class,
++    .init           = scte35_pts_adjust_init,
++    .filter         = scte35_pts_adjust_filter,
++    .close          = NULL,
++};

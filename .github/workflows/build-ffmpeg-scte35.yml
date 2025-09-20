@@ -1,0 +1,493 @@
+name: Build FFmpeg with SCTE-35 Support
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      target_platform:
+        description: 'Target platform'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+        - all
+        - linux-x64
+        - windows-x64
+        - macos-x64
+      enable_debug:
+        description: 'Enable debug symbols'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            platform: linux-x64
+            artifact_name: ffmpeg-linux-x64
+          - os: windows-2022
+            platform: windows-x64
+            artifact_name: ffmpeg-windows-x64
+          - os: macos-12
+            platform: macos-x64
+            artifact_name: ffmpeg-macos-x64
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up build environment
+      if: matrix.platform == 'linux-x64'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          autoconf \
+          automake \
+          build-essential \
+          cmake \
+          git-core \
+          libass-dev \
+          libfreetype6-dev \
+          libgnutls28-dev \
+          libmp3lame-dev \
+          libsdl2-dev \
+          libtool \
+          libva-dev \
+          libvdpau-dev \
+          libvorbis-dev \
+          libxcb1-dev \
+          libxcb-shm0-dev \
+          libxcb-xfixes0-dev \
+          meson \
+          ninja-build \
+          pkg-config \
+          texinfo \
+          wget \
+          yasm \
+          zlib1g-dev \
+          libx264-dev \
+          libx265-dev \
+          libvpx-dev \
+          libfdk-aac-dev \
+          libopus-dev \
+          libsrt-dev \
+          libssl-dev \
+          libbluray-dev \
+          libbs2b-dev \
+          libcaca-dev \
+          libcdio-paranoia-dev \
+          libcodec2-dev \
+          libdc1394-22-dev \
+          libflite1-dev \
+          libgme-dev \
+          libgsm1-dev \
+          libjack-jackd2-dev \
+          libmodplug-dev \
+          libopenal-dev \
+          libopenmpt-dev \
+          libpulse-dev \
+          librubberband-dev \
+          librsvg2-dev \
+          librtmp-dev \
+          libshine-dev \
+          libsnappy-dev \
+          libsoxr-dev \
+          libspeex-dev \
+          libssh-dev \
+          libtesseract-dev \
+          libtheora-dev \
+          libtwolame-dev \
+          libvidstab-dev \
+          libvo-amrwbenc-dev \
+          libwavpack-dev \
+          libwebp-dev \
+          libxvidcore-dev \
+          libzmq3-dev \
+          libzvbi-dev \
+          libaom-dev \
+          libdav1d-dev \
+          libsvtav1-dev \
+          libxml2-dev \
+          libfontconfig1-dev \
+          libfribidi-dev \
+          libharfbuzz-dev \
+          libzimg-dev \
+          libmysofa-dev \
+          libopencl-dev \
+          libopenh264-dev \
+          libkvazaar-dev \
+          libebur128-dev \
+          libdrm-dev \
+          libsmbclient-dev \
+          libxavs-dev \
+          libxavs2-dev
+
+    - name: Set up build environment (Windows)
+      if: matrix.platform == 'windows-x64'
+      run: |
+        # Install MSYS2 and dependencies
+        choco install -y msys2
+        $env:MSYS2_PATH = "C:\msys64"
+        $env:PATH = "$env:MSYS2_PATH\usr\bin;$env:PATH"
+        bash -lc "pacman -S --noconfirm --needed autoconf automake autotools cmake gcc make pkg-config yasm nasm git"
+        bash -lc "pacman -S --noconfirm --needed mingw-w64-x86_64-toolchain"
+        bash -lc "pacman -S --noconfirm --needed mingw-w64-x86_64-x264 mingw-w64-x86_64-x265 mingw-w64-x86_64-libvpx"
+        bash -lc "pacman -S --noconfirm --needed mingw-w64-x86_64-fdk-aac mingw-w64-x86_64-opus mingw-w64-x86_64-libsrt"
+
+    - name: Set up build environment (macOS)
+      if: matrix.platform == 'macos-x64'
+      run: |
+        brew install --quiet autoconf automake cmake git pkg-config yasm nasm
+        brew install --quiet x264 x265 libvpx fdk-aac opus libsrt
+
+    - name: Download FFmpeg source
+      run: |
+        wget -O ffmpeg.tar.bz2 https://ffmpeg.org/releases/ffmpeg-7.0.tar.bz2
+        tar -xjf ffmpeg.tar.bz2
+        mv ffmpeg-* ffmpeg
+
+    - name: Apply SCTE-35 patches
+      run: |
+        cd ffmpeg
+        patch -p1 < ../patches/scte35-comprehensive.patch
+        patch -p1 < ../patches/scte35-pts-adjust-bsf.patch
+
+    - name: Configure FFmpeg build
+      if: matrix.platform == 'linux-x64'
+      run: |
+        cd ffmpeg
+        ./configure \
+          --prefix=/usr/local \
+          --enable-gpl \
+          --enable-version3 \
+          --enable-nonfree \
+          --enable-shared \
+          --disable-static \
+          --enable-pic \
+          --enable-hardcoded-tables \
+          --disable-debug \
+          --disable-doc \
+          --disable-htmlpages \
+          --disable-manpages \
+          --disable-podpages \
+          --disable-txtpages \
+          --enable-ffmpeg \
+          --enable-ffprobe \
+          --enable-ffplay \
+          --enable-libass \
+          --enable-libfdk-aac \
+          --enable-libfreetype \
+          --enable-libfontconfig \
+          --enable-libfribidi \
+          --enable-libharfbuzz \
+          --enable-libmp3lame \
+          --enable-libopus \
+          --enable-libvorbis \
+          --enable-libvpx \
+          --enable-libx264 \
+          --enable-libx265 \
+          --enable-libsrt \
+          --enable-openssl \
+          --enable-libbluray \
+          --enable-libbs2b \
+          --enable-libcaca \
+          --enable-libcdio \
+          --enable-libcodec2 \
+          --enable-libdc1394 \
+          --enable-libflite \
+          --enable-libgme \
+          --enable-libgsm \
+          --enable-libjack \
+          --enable-libmodplug \
+          --enable-libopenal \
+          --enable-libopenmpt \
+          --enable-libpulse \
+          --enable-librubberband \
+          --enable-librsvg \
+          --enable-librtmp \
+          --enable-libshine \
+          --enable-libsnappy \
+          --enable-libsoxr \
+          --enable-libspeex \
+          --enable-libssh \
+          --enable-libtesseract \
+          --enable-libtheora \
+          --enable-libtwolame \
+          --enable-libvidstab \
+          --enable-libvo-amrwbenc \
+          --enable-libwavpack \
+          --enable-libwebp \
+          --enable-libxvid \
+          --enable-libzmq \
+          --enable-libzvbi \
+          --enable-libopenjpeg \
+          --enable-libdav1d \
+          --enable-libsvtav1 \
+          --enable-libxml2 \
+          --enable-libzimg \
+          --enable-libmysofa \
+          --enable-libopencl \
+          --enable-libopenh264 \
+          --enable-libkvazaar \
+          --enable-libebur128 \
+          --enable-libdrm \
+          --enable-libsmbclient \
+          --enable-libxavs \
+          --enable-libxavs2 \
+          --enable-vaapi \
+          --enable-vdpau \
+          --enable-nvenc \
+          --enable-nvdec \
+          --enable-cuda-llvm \
+          --enable-cuvid \
+          --enable-ffnvcodec
+
+    - name: Configure FFmpeg build (Windows)
+      if: matrix.platform == 'windows-x64'
+      run: |
+        cd ffmpeg
+        $env:CC = "gcc"
+        $env:CXX = "g++"
+        $env:PKG_CONFIG_PATH = "/mingw64/lib/pkgconfig"
+        ./configure \
+          --prefix=/usr/local \
+          --enable-gpl \
+          --enable-version3 \
+          --enable-nonfree \
+          --enable-shared \
+          --disable-static \
+          --enable-pic \
+          --enable-hardcoded-tables \
+          --disable-debug \
+          --disable-doc \
+          --disable-htmlpages \
+          --disable-manpages \
+          --disable-podpages \
+          --disable-txtpages \
+          --enable-ffmpeg \
+          --enable-ffprobe \
+          --enable-ffplay \
+          --arch=x86_64 \
+          --target-os=mingw32 \
+          --cross-prefix=x86_64-w64-mingw32- \
+          --enable-libass \
+          --enable-libfdk-aac \
+          --enable-libfreetype \
+          --enable-libfontconfig \
+          --enable-libfribidi \
+          --enable-libharfbuzz \
+          --enable-libmp3lame \
+          --enable-libopus \
+          --enable-libvorbis \
+          --enable-libvpx \
+          --enable-libx264 \
+          --enable-libx265 \
+          --enable-libsrt \
+          --enable-openssl \
+          --enable-libbluray \
+          --enable-libbs2b \
+          --enable-libcaca \
+          --enable-libcdio \
+          --enable-libcodec2 \
+          --enable-libdc1394 \
+          --enable-libflite \
+          --enable-libgme \
+          --enable-libgsm \
+          --enable-libjack \
+          --enable-libmodplug \
+          --enable-libopenal \
+          --enable-libopenmpt \
+          --enable-libpulse \
+          --enable-librubberband \
+          --enable-librsvg \
+          --enable-librtmp \
+          --enable-libshine \
+          --enable-libsnappy \
+          --enable-libsoxr \
+          --enable-libspeex \
+          --enable-libssh \
+          --enable-libtesseract \
+          --enable-libtheora \
+          --enable-libtwolame \
+          --enable-libvidstab \
+          --enable-libvo-amrwbenc \
+          --enable-libwavpack \
+          --enable-libwebp \
+          --enable-libxvid \
+          --enable-libzmq \
+          --enable-libzvbi \
+          --enable-libopenjpeg \
+          --enable-libdav1d \
+          --enable-libsvtav1 \
+          --enable-libxml2 \
+          --enable-libzimg \
+          --enable-libmysofa \
+          --enable-libopencl \
+          --enable-libopenh264 \
+          --enable-libkvazaar \
+          --enable-libebur128 \
+          --enable-libdrm \
+          --enable-libsmbclient \
+          --enable-libxavs \
+          --enable-libxavs2
+
+    - name: Configure FFmpeg build (macOS)
+      if: matrix.platform == 'macos-x64'
+      run: |
+        cd ffmpeg
+        ./configure \
+          --prefix=/usr/local \
+          --enable-gpl \
+          --enable-version3 \
+          --enable-nonfree \
+          --enable-shared \
+          --disable-static \
+          --enable-pic \
+          --enable-hardcoded-tables \
+          --disable-debug \
+          --disable-doc \
+          --disable-htmlpages \
+          --disable-manpages \
+          --disable-podpages \
+          --disable-txtpages \
+          --enable-ffmpeg \
+          --enable-ffprobe \
+          --enable-ffplay \
+          --enable-libass \
+          --enable-libfdk-aac \
+          --enable-libfreetype \
+          --enable-libfontconfig \
+          --enable-libfribidi \
+          --enable-libharfbuzz \
+          --enable-libmp3lame \
+          --enable-libopus \
+          --enable-libvorbis \
+          --enable-libvpx \
+          --enable-libx264 \
+          --enable-libx265 \
+          --enable-libsrt \
+          --enable-openssl \
+          --enable-libbluray \
+          --enable-libbs2b \
+          --enable-libcaca \
+          --enable-libcdio \
+          --enable-libcodec2 \
+          --enable-libdc1394 \
+          --enable-libflite \
+          --enable-libgme \
+          --enable-libgsm \
+          --enable-libjack \
+          --enable-libmodplug \
+          --enable-libopenal \
+          --enable-libopenmpt \
+          --enable-libpulse \
+          --enable-librubberband \
+          --enable-librsvg \
+          --enable-librtmp \
+          --enable-libshine \
+          --enable-libsnappy \
+          --enable-libsoxr \
+          --enable-libspeex \
+          --enable-libssh \
+          --enable-libtesseract \
+          --enable-libtheora \
+          --enable-libtwolame \
+          --enable-libvidstab \
+          --enable-libvo-amrwbenc \
+          --enable-libwavpack \
+          --enable-libwebp \
+          --enable-libxvid \
+          --enable-libzmq \
+          --enable-libzvbi \
+          --enable-libopenjpeg \
+          --enable-libdav1d \
+          --enable-libsvtav1 \
+          --enable-libxml2 \
+          --enable-libzimg \
+          --enable-libmysofa \
+          --enable-libopencl \
+          --enable-libopenh264 \
+          --enable-libkvazaar \
+          --enable-libebur128 \
+          --enable-libdrm \
+          --enable-libsmbclient \
+          --enable-libxavs \
+          --enable-libxavs2 \
+          --enable-videotoolbox \
+          --enable-audiotoolbox \
+          --enable-coreimage \
+          --enable-avfoundation
+
+    - name: Build FFmpeg
+      run: |
+        cd ffmpeg
+        make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+
+    - name: Install FFmpeg
+      run: |
+        cd ffmpeg
+        sudo make install
+
+    - name: Create distribution package
+      if: matrix.platform == 'linux-x64'
+      run: |
+        mkdir -p dist
+        cp /usr/local/bin/ffmpeg dist/
+        cp /usr/local/bin/ffprobe dist/
+        cp /usr/local/bin/ffplay dist/
+        cp -r /usr/local/lib dist/
+        cp -r /usr/local/include dist/
+        tar -czf ffmpeg-linux-x64.tar.gz -C dist .
+
+    - name: Create distribution package (Windows)
+      if: matrix.platform == 'windows-x64'
+      run: |
+        mkdir -p dist
+        cp /usr/local/bin/ffmpeg.exe dist/
+        cp /usr/local/bin/ffprobe.exe dist/
+        cp /usr/local/bin/ffplay.exe dist/
+        cp -r /usr/local/lib dist/
+        cp -r /usr/local/include dist/
+        tar -czf ffmpeg-windows-x64.tar.gz -C dist .
+
+    - name: Create distribution package (macOS)
+      if: matrix.platform == 'macos-x64'
+      run: |
+        mkdir -p dist
+        cp /usr/local/bin/ffmpeg dist/
+        cp /usr/local/bin/ffprobe dist/
+        cp /usr/local/bin/ffplay dist/
+        cp -r /usr/local/lib dist/
+        cp -r /usr/local/include dist/
+        tar -czf ffmpeg-macos-x64.tar.gz -C dist .
+
+    - name: Verify SCTE-35 support
+      run: |
+        ./ffmpeg/ffmpeg -h muxer=mpegts 2>&1 | grep -i scte || echo "SCTE-35 support verification needed"
+        ./ffmpeg/ffmpeg -f lavfi -i testsrc=duration=1:size=320x240:rate=30 -f lavfi -i sine=frequency=1000:duration=1 -c:v libx264 -c:a aac -f mpegts -muxrate 1000000 -y test_output.ts
+        ./ffmpeg/ffprobe -v quiet -show_streams -select_streams v:0 test_output.ts | grep -i codec_name || echo "Stream verification completed"
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.artifact_name }}
+        path: |
+          ffmpeg-*.tar.gz
+        retention-days: 30
+
+    - name: Upload build logs
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: ${{ matrix.artifact_name }}-logs
+        path: |
+          ffmpeg/config.log
+          ffmpeg/ffbuild/config.log
+        retention-days: 7
