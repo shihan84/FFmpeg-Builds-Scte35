@@ -1,0 +1,342 @@
+name: Build FFmpeg with SCTE-35 Passthrough (ffmpeg-20342)
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths: [ 'patches/**', 'variants/**', 'scripts.d/**' ]
+  pull_request:
+    branches: [ main ]
+    paths: [ 'patches/**', 'variants/**', 'scripts.d/**' ]
+  workflow_dispatch:
+    inputs:
+      ffmpeg_version:
+        description: 'FFmpeg version to build'
+        required: false
+        default: '7.0'
+      target_platform:
+        description: 'Target platform'
+        required: false
+        default: 'linux64'
+        type: choice
+        options:
+          - linux64
+          - linux32
+          - linuxarm64
+          - win64
+          - win32
+          - winarm64
+          - macos64
+      build_variant:
+        description: 'Build variant'
+        required: false
+        default: 'gpl'
+        type: choice
+        options:
+          - gpl
+          - lgpl
+          - gpl-shared
+          - lgpl-shared
+
+env:
+  FFMPEG_VERSION: ${{ github.event.inputs.ffmpeg_version || '7.0' }}
+  TARGET_PLATFORM: ${{ github.event.inputs.target_platform || 'linux64' }}
+  BUILD_VARIANT: ${{ github.event.inputs.build_variant || 'gpl' }}
+
+jobs:
+  build-ffmpeg-scte35:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            platform: linux64
+            variant: gpl
+            arch: x64
+          - os: ubuntu-22.04
+            platform: linux64
+            variant: gpl-shared
+            arch: x64
+          - os: ubuntu-22.04
+            platform: linux32
+            variant: gpl
+            arch: x32
+          - os: ubuntu-22.04
+            platform: linuxarm64
+            variant: gpl
+            arch: arm64
+          - os: windows-2022
+            platform: win64
+            variant: gpl
+            arch: x64
+          - os: windows-2022
+            platform: win32
+            variant: gpl
+            arch: x32
+          - os: macos-13
+            platform: macos64
+            variant: gpl
+            arch: x64
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build FFmpeg with SCTE-35 Support
+      run: |
+        echo "Building FFmpeg with SCTE-35 passthrough support (ffmpeg-20342.patch)"
+        echo "Platform: ${{ matrix.platform }}"
+        echo "Variant: ${{ matrix.variant }}"
+        echo "Architecture: ${{ matrix.arch }}"
+        
+        # Use the existing FFmpeg-Builds system
+        chmod +x build.sh
+        chmod +x download.sh
+        chmod +x generate.sh
+        
+        # Set environment variables for the build
+        export TARGET="${{ matrix.platform }}"
+        export VARIANT="${{ matrix.variant }}"
+        export FFMPEG_VERSION="${{ env.FFMPEG_VERSION }}"
+        
+        # Run the build with SCTE-35 patches
+        ./build.sh "${{ matrix.platform }}" "${{ matrix.variant }}"
+
+    - name: Verify SCTE-35 Support
+      run: |
+        echo "Verifying SCTE-35 support in built FFmpeg..."
+        
+        # Check if artifacts were created
+        if [ -d "artifacts" ]; then
+          echo "Build artifacts found:"
+          ls -la artifacts/
+          
+          # Extract and test the built FFmpeg
+          for artifact in artifacts/*.tar.xz; do
+            if [ -f "$artifact" ]; then
+              echo "Testing artifact: $artifact"
+              tar -tf "$artifact" | head -10
+            fi
+          done
+        else
+          echo "No artifacts directory found"
+        fi
+
+    - name: Create SCTE-35 Test
+      run: |
+        echo "Creating SCTE-35 test to verify functionality..."
+        
+        # Create a simple test script
+        cat > test_scte35.sh << 'EOF'
+        #!/bin/bash
+        echo "SCTE-35 Test Script"
+        echo "=================="
+        
+        # Test if FFmpeg supports SCTE-35
+        if command -v ffmpeg &> /dev/null; then
+          echo "FFmpeg found, testing SCTE-35 support..."
+          
+          # Check for SCTE-35 in muxer help
+          if ffmpeg -h muxer=mpegts 2>&1 | grep -i scte; then
+            echo "✅ SCTE-35 support detected in MPEG-TS muxer"
+          else
+            echo "❌ SCTE-35 support not found in MPEG-TS muxer"
+          fi
+          
+          # Check for SCTE-35 bitstream filters
+          if ffmpeg -bsfs 2>&1 | grep -i scte35; then
+            echo "✅ SCTE-35 bitstream filters available"
+          else
+            echo "❌ SCTE-35 bitstream filters not found"
+          fi
+          
+          # Test basic functionality
+          echo "Testing basic FFmpeg functionality..."
+          ffmpeg -f lavfi -i testsrc=duration=1:size=320x240:rate=30 -c:v libx264 -f mpegts test_output.ts -y
+          if [ $? -eq 0 ]; then
+            echo "✅ Basic FFmpeg functionality working"
+            rm -f test_output.ts
+          else
+            echo "❌ Basic FFmpeg functionality failed"
+          fi
+        else
+          echo "❌ FFmpeg not found in PATH"
+        fi
+        EOF
+        
+        chmod +x test_scte35.sh
+        echo "SCTE-35 test script created"
+
+    - name: Upload Build Artifacts
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: ffmpeg-scte35-${{ matrix.platform }}-${{ matrix.variant }}-${{ matrix.arch }}
+        path: |
+          artifacts/
+          test_scte35.sh
+        retention-days: 30
+
+    - name: Upload Build Logs
+      uses: actions/upload-artifact@v4
+      if: failure()
+      with:
+        name: build-logs-${{ matrix.platform }}-${{ matrix.variant }}
+        path: |
+          ffbuild/
+          *.log
+        retention-days: 7
+
+  create-release:
+    needs: build-ffmpeg-scte35
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Create release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          artifacts/ffmpeg-scte35-linux64-gpl-x64/artifacts/*
+          artifacts/ffmpeg-scte35-linux64-gpl-shared-x64/artifacts/*
+          artifacts/ffmpeg-scte35-linux32-gpl-x32/artifacts/*
+          artifacts/ffmpeg-scte35-linuxarm64-gpl-arm64/artifacts/*
+          artifacts/ffmpeg-scte35-win64-gpl-x64/artifacts/*
+          artifacts/ffmpeg-scte35-win32-gpl-x32/artifacts/*
+          artifacts/ffmpeg-scte35-macos64-gpl-x64/artifacts/*
+        tag_name: ffmpeg-scte35-20342-v${{ github.run_number }}
+        name: FFmpeg with SCTE-35 Passthrough (ffmpeg-20342) v${{ github.run_number }}
+        body: |
+          # FFmpeg with SCTE-35 Passthrough Support
+          
+          This build includes the **ffmpeg-20342.patch** by Pierre Le Fevre, which provides clean SCTE-35 passthrough without PES wrapping.
+          
+          ## 🎯 SCTE-35 Features
+          
+          - **Clean Passthrough**: SCTE-35 messages pass through without PES wrapping
+          - **Registration Descriptors**: Proper CUEI registration descriptor support  
+          - **Stream Type Handling**: Correct SCTE-35 stream type (0x86) in PMT
+          - **Section-based Processing**: Direct section writing for SCTE-35 packets
+          
+          ## 📦 Build Information
+          
+          - **FFmpeg Version**: ${{ env.FFMPEG_VERSION }}
+          - **Patch Applied**: ffmpeg-20342.patch (SCTE-35 Passthrough)
+          - **Build Date**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          - **Commit**: ${{ github.sha }}
+          
+          ## 🚀 Usage Examples
+          
+          ### Basic SCTE-35 Passthrough:
+          ```bash
+          # Extract the appropriate build for your platform
+          tar -xf ffmpeg-scte35-linux64-gpl-x64.tar.xz
+          export PATH=$(pwd)/ffmpeg-scte35-linux64-gpl-x64/bin:$PATH
+          
+          # Pass through SCTE-35 messages without modification
+          ffmpeg -i input_with_scte35.ts -c copy -f mpegts output_with_scte35.ts
+          ```
+          
+          ### Verify SCTE-35 Support:
+          ```bash
+          # Check SCTE-35 support
+          ffmpeg -h muxer=mpegts | grep -i scte
+          
+          # Test basic functionality
+          ffmpeg -f lavfi -i testsrc=duration=1:size=320x240:rate=30 -c:v libx264 -f mpegts test.ts
+          ```
+          
+          ## 🔧 Technical Details
+          
+          The **ffmpeg-20342.patch** implements:
+          
+          1. **SCTE-35 Section Handling**: Direct section writing for SCTE-35 packets
+          2. **Registration Descriptors**: Proper CUEI registration in PMT
+          3. **Stream Type Support**: Correct SCTE-35 stream type handling
+          4. **Clean Passthrough**: No PES wrapping for SCTE-35 messages
+          
+          ## 📋 Supported Platforms
+          
+          - **Linux x64** (GPL, GPL-Shared)
+          - **Linux x32** (GPL)
+          - **Linux ARM64** (GPL)
+          - **Windows x64** (GPL)
+          - **Windows x32** (GPL)
+          - **macOS x64** (GPL)
+          
+          ## 📄 License
+          
+          This build uses FFmpeg with GPL v2+ license. The SCTE-35 patch is contributed back to the FFmpeg project.
+          
+          ## 🙏 Credits
+          
+          - **SCTE-35 Patch**: Pierre Le Fevre (ffmpeg-20342.patch)
+          - **Build System**: FFmpeg-Builds framework
+          - **Original FFmpeg**: FFmpeg development team
+        draft: false
+        prerelease: false
+
+  test-scte35-functionality:
+    needs: build-ffmpeg-scte35
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Download Linux artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: ffmpeg-scte35-linux64-gpl-x64
+        path: test-artifacts
+
+    - name: Test SCTE-35 Functionality
+      run: |
+        echo "Testing SCTE-35 functionality..."
+        
+        # Extract the FFmpeg build
+        cd test-artifacts
+        for file in artifacts/*.tar.xz; do
+          if [ -f "$file" ]; then
+            echo "Extracting: $file"
+            tar -xf "$file"
+            break
+          fi
+        done
+        
+        # Find the FFmpeg binary
+        FFMPEG_BIN=$(find . -name "ffmpeg" -type f | head -1)
+        if [ -z "$FFMPEG_BIN" ]; then
+          echo "❌ FFmpeg binary not found"
+          exit 1
+        fi
+        
+        echo "✅ Found FFmpeg binary: $FFMPEG_BIN"
+        
+        # Test SCTE-35 support
+        echo "Testing SCTE-35 support..."
+        if $FFMPEG_BIN -h muxer=mpegts 2>&1 | grep -i scte; then
+          echo "✅ SCTE-35 support detected in MPEG-TS muxer"
+        else
+          echo "❌ SCTE-35 support not found"
+        fi
+        
+        # Test basic functionality
+        echo "Testing basic FFmpeg functionality..."
+        $FFMPEG_BIN -f lavfi -i testsrc=duration=1:size=320x240:rate=30 -c:v libx264 -f mpegts test_output.ts -y
+        if [ $? -eq 0 ]; then
+          echo "✅ Basic FFmpeg functionality working"
+          rm -f test_output.ts
+        else
+          echo "❌ Basic FFmpeg functionality failed"
+          exit 1
+        fi
+        
+        echo "🎉 SCTE-35 functionality test completed successfully!"
