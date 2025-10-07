@@ -1,4 +1,39 @@
-/Dockerfile*
-/ffbuild/
-/artifacts/
-/.cache/
+# Build artifacts
+build/
+dist/
+*.tar.gz
+*.zip
+*.exe
+*.dll
+*.so
+*.dylib
+
+# FFmpeg source
+ffmpeg/
+ffmpeg-*/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Test files
+test_output.*
+test_*.ts
+test_*.mp4

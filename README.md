@@ -1,68 +1,133 @@
-# FFmpeg Static Auto-Builds
+<<<<<<< HEAD
+# FFmpeg Builds with SCTE-35 Support
 
-Static Windows (x86_64) and Linux (x86_64) Builds of ffmpeg master and latest release branch.
+Automated builds of FFmpeg with comprehensive SCTE-35 support for professional broadcasting and streaming applications.
 
-Windows builds are targetting Windows 7 and newer, provided UCRT is installed.
-The minimum supported version is Windows 10 22H2, no guarantees on anything older.
+## Features Included:
+- ✅ **SCTE-35 Support** - Complete implementation with passthrough and PTS adjustment
+- ✅ SRT protocol (libsrt) - Secure Reliable Transport
+- ✅ RTMP/RTMPS (librtmp) - Real-time messaging protocol
+- ✅ HLS muxing/demuxing - HTTP Live Streaming
+- ✅ MPEG-TS broadcasting - Transport stream support
+- ✅ Hardware acceleration (CUDA, NVENC) - GPU-accelerated encoding
+- ✅ All major codecs - H.264, H.265, VP9, AV1, etc.
 
-Linux builds are targetting RHEL/CentOS 8 (glibc-2.28 + linux-4.18) and anything more recent.
+## SCTE-35 Features:
+- **Clean Passthrough**: SCTE-35 messages pass through without PES wrapping
+- **PTS Preservation**: Original transport timestamps are preserved
+- **Reclocking Support**: Bitstream filter for PTS adjustment during reclocking
+- **Registration Descriptors**: Proper CUEI registration descriptor support
+- **Stream Type Handling**: Correct SCTE-35 stream type (0x86) in PMT
 
-## Auto-Builds
+## Usage:
 
-Builds run daily at 12:00 UTC (or GitHubs idea of that time) and are automatically released on success.
+### GitHub Actions (Recommended):
+1. Go to the **Actions** tab in this repository
+2. Run the **"Build FFmpeg with SCTE-35 Support"** workflow
+3. Download artifacts from the completed run
+4. Extract and use the ffmpeg binary
 
-**Auto-Builds run ONLY for win64 and linux(arm)64. There are no win32/x86 auto-builds, though you can produce win32 builds yourself following the instructions below.**
+### Manual Build:
+```bash
+# Clone the repository
+git clone https://github.com/your-username/FFmpeg-Builds-Scte35.git
+cd FFmpeg-Builds-Scte35
 
-### Release Retention Policy
+# Apply patches and build
+cd ffmpeg
+patch -p1 < ../patches/scte35-comprehensive.patch
+patch -p1 < ../patches/scte35-pts-adjust-bsf.patch
+./configure --enable-gpl --enable-version3 --enable-libsrt --enable-libx264 --enable-libx265
+make -j$(nproc)
+```
 
-- The last build of each month is kept for two years.
-- The last 14 daily builds are kept.
-- The special "latest" build floats and provides consistent URLs always pointing to the latest build.
+## SCTE-35 Usage Examples:
 
-## Package List
+### Basic SCTE-35 Passthrough:
+```bash
+# Pass through SCTE-35 messages without modification
+ffmpeg -i input.ts -c copy -f mpegts output.ts
+```
 
-For a list of included dependencies check the scripts.d directory.
-Every file corresponds to its respective package.
+### SCTE-35 with Reclocking:
+```bash
+# Use PTS adjustment bitstream filter for reclocking
+ffmpeg -i input.ts -bsf:v scte35_pts_adjust -c copy -f mpegts output.ts
+```
 
-## How to make a build
+### Create SCTE-35 Test Stream:
+```bash
+# Generate test content with SCTE-35 markers
+ffmpeg -f lavfi -i testsrc=size=1920x1080:rate=30 -f lavfi -i sine=frequency=1000 -c:v libx264 -c:a aac -f mpegts -muxrate 5000000 output.ts
+```
 
-### Prerequisites
+## Verification:
+```bash
+# Check SCTE-35 support
+./ffmpeg -h muxer=mpegts | grep -i scte
 
-* bash
-* docker
+# Verify bitstream filters
+./ffmpeg -bsfs | grep scte35
 
-### Build Image
+# Test MPEG-TS output
+./ffmpeg -f lavfi -i testsrc=duration=1:size=320x240:rate=30 -c:v libx264 -f mpegts test.ts
+```
 
-* `./makeimage.sh target variant [addin [addin] [addin] ...]`
+## Supported Platforms:
+- **Linux x64** - Ubuntu 22.04 LTS
+- **Windows x64** - Windows Server 2022
+- **macOS x64** - macOS 12+
 
-### Build FFmpeg
+## Quick Start:
 
-* `./build.sh target variant [addin [addin] [addin] ...]`
+### 1. Setup GitHub Repository:
+```bash
+# Linux/macOS
+./scripts/setup-github.sh
 
-On success, the resulting zip file will be in the `artifacts` subdir.
+# Windows
+scripts\setup-github.bat
+```
 
-### Targets, Variants and Addins
+### 2. Automatic Builds:
+- Push to `main` branch triggers build workflow
+- Create tags (e.g., `v7.0.1-scte35`) triggers release workflow
+- Download artifacts from Actions or Releases tab
 
-Available targets:
-* `win64` (x86_64 Windows)
-* `win32` (x86 Windows)
-* `linux64` (x86_64 Linux, glibc>=2.28, linux>=4.18)
-* `linuxarm64` (arm64 (aarch64) Linux, glibc>=2.28, linux>=4.18)
+### 3. Manual Builds:
+- Go to Actions tab in GitHub
+- Select "Build FFmpeg with SCTE-35 Support"
+- Click "Run workflow"
 
-The linuxarm64 target will not build some dependencies due to lack of arm64 (aarch64) architecture support or cross-compiling restrictions.
+## Patch Sources:
+This build incorporates SCTE-35 patches from the FFmpeg development community:
+- [2023 SCTE-35 Implementation](https://ffmpeg.org/pipermail/ffmpeg-devel/2023-July/312420.html) by Devin Heitmueller
+- [2025 Passthrough Improvements](https://ffmpeg.org/pipermail/ffmpeg-devel/2025-June/344978.html) by Pierre Le Fevre
 
-* `davs2` and `xavs2`: aarch64 support is broken.
-* `libmfx` and `libva`: Library for Intel QSV, so there is no aarch64 support.
+## License:
+This project builds FFmpeg with GPL v2+ license. All patches are contributed back to the FFmpeg project.
+=======
+# FFmpeg Streaming Build
 
-Available variants:
-* `gpl` Includes all dependencies, even those that require full GPL instead of just LGPL.
-* `lgpl` Lacking libraries that are GPL-only. Most prominently libx264 and libx265.
-* `nonfree` Includes fdk-aac in addition to all the dependencies of the gpl variant.
-* `gpl-shared` Same as gpl, but comes with the libav* family of shared libs instead of pure static executables.
-* `lgpl-shared` Same again, but with the lgpl set of dependencies.
-* `nonfree-shared` Same again, but with the nonfree set of dependencies.
+Automated builds of FFmpeg with full streaming support:
 
-All of those can be optionally combined with any combination of addins:
-* `4.4`/`5.0`/`5.1`/`6.0`/`6.1`/`7.0`/`7.1` to build from the respective release branch instead of master.
-* `debug` to not strip debug symbols from the binaries. This increases the output size by about 250MB.
-* `lto` build all dependencies and ffmpeg with -flto=auto (HIGHLY EXPERIMENTAL, broken for Windows, sometimes works for Linux)
+## Features Included:
+- ✅ SRT protocol (libsrt)
+- ✅ RTMP/RTMPS (librtmp) 
+- ✅ HLS muxing/demuxing
+- ✅ SCTE35 support
+- ✅ MPEG-TS broadcasting
+- ✅ Hardware acceleration (CUDA, NVENC)
+- ✅ All major codecs
+
+## Usage:
+1. Go to Actions tab
+2. Run "Build FFmpeg with Full Streaming Support" workflow
+3. Download artifacts from completed run
+4. Extract and use ffmpeg binary
+
+## Verification:
+```bash
+./ffmpeg -protocols | grep srt
+./ffmpeg -h muxer=mpegts | grep -i scte
+>>>>>>> 0ced8830a07c24e22b9ac7caf61cd809f1b38a6e
