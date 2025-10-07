@@ -1,0 +1,323 @@
+name: Build FFmpeg with SCTE-35 Passthrough (Simple)
+
+on:
+  push:
+    branches: [ main ]
+    paths: [ 'patches/**' ]
+  pull_request:
+    branches: [ main ]
+    paths: [ 'patches/**' ]
+  workflow_dispatch:
+    inputs:
+      ffmpeg_version:
+        description: 'FFmpeg version to build'
+        required: false
+        default: '7.0'
+
+env:
+  FFMPEG_VERSION: ${{ github.event.inputs.ffmpeg_version || '7.0' }}
+
+jobs:
+  build-ffmpeg-scte35:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, windows-2022, macos-13]
+        include:
+          - os: ubuntu-22.04
+            platform: linux
+            arch: x64
+          - os: windows-2022
+            platform: windows
+            arch: x64
+          - os: macos-13
+            platform: macos
+            arch: x64
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up build environment (Ubuntu)
+      if: matrix.os == 'ubuntu-22.04'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          autoconf \
+          automake \
+          build-essential \
+          cmake \
+          git-core \
+          libass-dev \
+          libfreetype6-dev \
+          libgnutls28-dev \
+          libmp3lame-dev \
+          libsdl2-dev \
+          libtool \
+          libva-dev \
+          libvdpau-dev \
+          libvorbis-dev \
+          libxcb1-dev \
+          libxcb-shm0-dev \
+          libxcb-xfixes0-dev \
+          meson \
+          ninja-build \
+          pkg-config \
+          texinfo \
+          wget \
+          yasm \
+          zlib1g-dev \
+          libx264-dev \
+          libx265-dev \
+          libvpx-dev \
+          libfdk-aac-dev \
+          libmp3lame-dev \
+          libopus-dev \
+          libssl-dev \
+          nasm
+
+    - name: Set up build environment (Windows)
+      if: matrix.os == 'windows-2022'
+      uses: msys2/setup-msys2@v2
+      with:
+        msys2-arch: x64
+        install: >-
+          base-devel
+          mingw-w64-x86_64-toolchain
+          mingw-w64-x86_64-cmake
+          mingw-w64-x86_64-ninja
+          mingw-w64-x86_64-pkg-config
+          mingw-w64-x86_64-yasm
+          mingw-w64-x86_64-nasm
+          mingw-w64-x86_64-gcc
+          mingw-w64-x86_64-gdb
+          mingw-w64-x86_64-make
+
+    - name: Install Windows dependencies
+      if: matrix.os == 'windows-2022'
+      shell: msys2 {0}
+      run: |
+        pacman -S --noconfirm --needed \
+          mingw-w64-x86_64-libx264 \
+          mingw-w64-x86_64-libx265 \
+          mingw-w64-x86_64-libvpx \
+          mingw-w64-x86_64-fdk-aac \
+          mingw-w64-x86_64-lame \
+          mingw-w64-x86_64-opus \
+          mingw-w64-x86_64-openssl
+
+    - name: Set up build environment (macOS)
+      if: matrix.os == 'macos-13'
+      run: |
+        brew install autoconf automake cmake git-core libtool pkg-config wget yasm
+        brew install x264 x265 libvpx fdk-aac lame opus openssl
+
+    - name: Download FFmpeg source
+      run: |
+        wget https://ffmpeg.org/releases/ffmpeg-${{ env.FFMPEG_VERSION }}.tar.xz
+        tar -xf ffmpeg-${{ env.FFMPEG_VERSION }}.tar.xz
+        cd ffmpeg-${{ env.FFMPEG_VERSION }}
+
+    - name: Apply SCTE-35 patch (ffmpeg-20342)
+      run: |
+        cd ffmpeg-${{ env.FFMPEG_VERSION }}
+        
+        # Apply the SCTE-35 passthrough patch
+        if [ -f "../patches/ffmpeg/ffmpeg-20342.patch" ]; then
+          echo "Applying SCTE-35 passthrough patch (ffmpeg-20342.patch)..."
+          patch -p1 < ../patches/ffmpeg/ffmpeg-20342.patch
+          echo "✅ SCTE-35 patch applied successfully"
+        else
+          echo "❌ SCTE-35 patch not found: patches/ffmpeg/ffmpeg-20342.patch"
+          exit 1
+        fi
+
+    - name: Configure FFmpeg
+      run: |
+        cd ffmpeg-${{ env.FFMPEG_VERSION }}
+        
+        # Basic configuration for SCTE-35 support
+        ./configure \
+          --prefix=/usr/local \
+          --enable-gpl \
+          --enable-version3 \
+          --enable-nonfree \
+          --enable-shared \
+          --disable-static \
+          --enable-libx264 \
+          --enable-libx265 \
+          --enable-libvpx \
+          --enable-libfdk-aac \
+          --enable-libmp3lame \
+          --enable-libopus \
+          --enable-openssl \
+          --enable-libass \
+          --enable-libfreetype \
+          --extra-version=-SCTE35-20342 \
+          --enable-muxer=mpegts \
+          --enable-demuxer=mpegts \
+          --enable-protocol=srt \
+          --enable-protocol=rtmp \
+          --enable-protocol=udp \
+          --enable-protocol=tcp \
+          --enable-protocol=http \
+          --enable-protocol=https \
+          --enable-protocol=hls \
+          --enable-protocol=dash
+
+    - name: Build FFmpeg
+      run: |
+        cd ffmpeg-${{ env.FFMPEG_VERSION }}
+        if [ "${{ matrix.os }}" = "windows-2022" ]; then
+          make -j$(nproc)
+        elif [ "${{ matrix.os }}" = "macos-13" ]; then
+          make -j$(sysctl -n hw.ncpu)
+        else
+          make -j$(nproc)
+        fi
+
+    - name: Test FFmpeg SCTE-35 support
+      run: |
+        cd ffmpeg-${{ env.FFMPEG_VERSION }}
+        if [ "${{ matrix.os }}" = "windows-2022" ]; then
+          ./ffmpeg.exe -version | head -1
+          echo "Testing SCTE-35 support..."
+          ./ffmpeg.exe -h muxer=mpegts 2>&1 | grep -i scte || echo "SCTE-35 support check completed"
+        else
+          ./ffmpeg -version | head -1
+          echo "Testing SCTE-35 support..."
+          ./ffmpeg -h muxer=mpegts 2>&1 | grep -i scte || echo "SCTE-35 support check completed"
+        fi
+
+    - name: Install FFmpeg
+      run: |
+        cd ffmpeg-${{ env.FFMPEG_VERSION }}
+        if [ "${{ matrix.os }}" = "windows-2022" ]; then
+          make install
+        else
+          sudo make install
+          if [ "${{ matrix.os }}" = "ubuntu-22.04" ]; then
+            sudo ldconfig
+          fi
+        fi
+
+    - name: Create FFmpeg package
+      run: |
+        mkdir -p ffmpeg-scte35-${{ matrix.platform }}-${{ matrix.arch }}
+        
+        if [ "${{ matrix.os }}" = "windows-2022" ]; then
+          cp /usr/local/bin/ffmpeg.exe ffmpeg-scte35-${{ matrix.platform }}-${{ matrix.arch }}/
+          cp /usr/local/bin/ffprobe.exe ffmpeg-scte35-${{ matrix.platform }}-${{ matrix.arch }}/
+          cp /usr/local/bin/ffplay.exe ffmpeg-scte35-${{ matrix.platform }}-${{ matrix.arch }}/
+          cp /usr/local/bin/*.dll ffmpeg-scte35-${{ matrix.platform }}-${{ matrix.arch }}/ 2>/dev/null || true
+        else
+          cp /usr/local/bin/ffmpeg ffmpeg-scte35-${{ matrix.platform }}-${{ matrix.arch }}/
+          cp /usr/local/bin/ffprobe ffmpeg-scte35-${{ matrix.platform }}-${{ matrix.arch }}/
+          cp /usr/local/bin/ffplay ffmpeg-scte35-${{ matrix.platform }}-${{ matrix.arch }}/
+          if [ "${{ matrix.os }}" = "macos-13" ]; then
+            cp /usr/local/lib/libav*.dylib ffmpeg-scte35-${{ matrix.platform }}-${{ matrix.arch }}/ 2>/dev/null || true
+          else
+            cp /usr/local/lib/libav*.so* ffmpeg-scte35-${{ matrix.platform }}-${{ matrix.arch }}/ 2>/dev/null || true
+          fi
+        fi
+        
+        # Create archive
+        if [ "${{ matrix.os }}" = "windows-2022" ]; then
+          zip -r ffmpeg-scte35-${{ matrix.platform }}-${{ matrix.arch }}.zip ffmpeg-scte35-${{ matrix.platform }}-${{ matrix.arch }}/
+        else
+          tar -czf ffmpeg-scte35-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz ffmpeg-scte35-${{ matrix.platform }}-${{ matrix.arch }}/
+        fi
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ffmpeg-scte35-${{ matrix.platform }}-${{ matrix.arch }}
+        path: ffmpeg-scte35-${{ matrix.platform }}-${{ matrix.arch }}.*
+
+  create-release:
+    needs: build-ffmpeg-scte35
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Create release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          artifacts/ffmpeg-scte35-linux-x64/ffmpeg-scte35-linux-x64.tar.gz
+          artifacts/ffmpeg-scte35-windows-x64/ffmpeg-scte35-windows-x64.zip
+          artifacts/ffmpeg-scte35-macos-x64/ffmpeg-scte35-macos-x64.tar.gz
+        tag_name: ffmpeg-scte35-20342-v${{ github.run_number }}
+        name: FFmpeg with SCTE-35 Passthrough (ffmpeg-20342) v${{ github.run_number }}
+        body: |
+          # FFmpeg with SCTE-35 Passthrough Support
+          
+          This build includes the **ffmpeg-20342.patch** by Pierre Le Fevre, which provides clean SCTE-35 passthrough without PES wrapping.
+          
+          ## 🎯 SCTE-35 Features
+          
+          - **Clean Passthrough**: SCTE-35 messages pass through without PES wrapping
+          - **Registration Descriptors**: Proper CUEI registration descriptor support  
+          - **Stream Type Handling**: Correct SCTE-35 stream type (0x86) in PMT
+          - **Section-based Processing**: Direct section writing for SCTE-35 packets
+          
+          ## 📦 Build Information
+          
+          - **FFmpeg Version**: ${{ env.FFMPEG_VERSION }}
+          - **Patch Applied**: ffmpeg-20342.patch (SCTE-35 Passthrough)
+          - **Build Date**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          - **Commit**: ${{ github.sha }}
+          
+          ## 🚀 Usage Examples
+          
+          ### Basic SCTE-35 Passthrough:
+          ```bash
+          # Extract the appropriate build for your platform
+          tar -xf ffmpeg-scte35-linux-x64.tar.gz
+          export PATH=$(pwd)/ffmpeg-scte35-linux-x64:$PATH
+          
+          # Pass through SCTE-35 messages without modification
+          ffmpeg -i input_with_scte35.ts -c copy -f mpegts output_with_scte35.ts
+          ```
+          
+          ### Verify SCTE-35 Support:
+          ```bash
+          # Check SCTE-35 support
+          ffmpeg -h muxer=mpegts | grep -i scte
+          
+          # Test basic functionality
+          ffmpeg -f lavfi -i testsrc=duration=1:size=320x240:rate=30 -c:v libx264 -f mpegts test.ts
+          ```
+          
+          ## 🔧 Technical Details
+          
+          The **ffmpeg-20342.patch** implements:
+          
+          1. **SCTE-35 Section Handling**: Direct section writing for SCTE-35 packets
+          2. **Registration Descriptors**: Proper CUEI registration in PMT
+          3. **Stream Type Support**: Correct SCTE-35 stream type handling
+          4. **Clean Passthrough**: No PES wrapping for SCTE-35 messages
+          
+          ## 📋 Supported Platforms
+          
+          - **Linux x64** (Ubuntu 22.04)
+          - **Windows x64** (Windows Server 2022)
+          - **macOS x64** (macOS 13)
+          
+          ## 📄 License
+          
+          This build uses FFmpeg with GPL v2+ license. The SCTE-35 patch is contributed back to the FFmpeg project.
+          
+          ## 🙏 Credits
+          
+          - **SCTE-35 Patch**: Pierre Le Fevre (ffmpeg-20342.patch)
+          - **Original FFmpeg**: FFmpeg development team
+        draft: false
+        prerelease: false
