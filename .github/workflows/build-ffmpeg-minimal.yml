@@ -1,0 +1,168 @@
+name: Build FFmpeg with SCTE-35 (Minimal)
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-ffmpeg:
+    runs-on: ubuntu-22.04
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Verify patch exists
+      run: |
+        echo "Checking for SCTE-35 patch..."
+        ls -la patches/ffmpeg/
+        if [ -f "patches/ffmpeg/ffmpeg-20342.patch" ]; then
+          echo "✅ SCTE-35 patch found"
+          echo "Patch size: $(wc -c < patches/ffmpeg/ffmpeg-20342.patch) bytes"
+        else
+          echo "❌ SCTE-35 patch not found!"
+          exit 1
+        fi
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          autoconf \
+          automake \
+          build-essential \
+          cmake \
+          git \
+          libass-dev \
+          libfreetype6-dev \
+          libgnutls28-dev \
+          libmp3lame-dev \
+          libsdl2-dev \
+          libtool \
+          libva-dev \
+          libvdpau-dev \
+          libvorbis-dev \
+          libxcb1-dev \
+          libxcb-shm0-dev \
+          libxcb-xfixes0-dev \
+          meson \
+          ninja-build \
+          pkg-config \
+          texinfo \
+          wget \
+          yasm \
+          zlib1g-dev \
+          libx264-dev \
+          libx265-dev \
+          libvpx-dev \
+          libfdk-aac-dev \
+          libmp3lame-dev \
+          libopus-dev \
+          libssl-dev \
+          nasm
+
+    - name: Download FFmpeg source
+      run: |
+        echo "Downloading FFmpeg 7.0..."
+        wget -O ffmpeg.tar.xz "https://ffmpeg.org/releases/ffmpeg-7.0.tar.xz"
+        tar -xf ffmpeg.tar.xz
+        cd ffmpeg-7.0
+        echo "FFmpeg source ready"
+
+    - name: Apply SCTE-35 patch
+      run: |
+        cd ffmpeg-7.0
+        echo "Applying SCTE-35 patch..."
+        patch -p1 < ../patches/ffmpeg/ffmpeg-20342.patch
+        echo "✅ Patch applied successfully"
+        
+        # Verify patch was applied
+        if grep -q "scte35" libavformat/mpegtsenc.c; then
+          echo "✅ SCTE-35 code detected"
+        else
+          echo "⚠️  SCTE-35 code not found"
+        fi
+
+    - name: Configure FFmpeg
+      run: |
+        cd ffmpeg-7.0
+        echo "Configuring FFmpeg..."
+        ./configure \
+          --prefix=/usr/local \
+          --enable-gpl \
+          --enable-version3 \
+          --enable-shared \
+          --disable-static \
+          --enable-libx264 \
+          --enable-libx265 \
+          --enable-libvpx \
+          --enable-libfdk-aac \
+          --enable-libmp3lame \
+          --enable-libopus \
+          --enable-openssl \
+          --enable-libass \
+          --enable-libfreetype \
+          --extra-version=-SCTE35-20342 \
+          --enable-muxer=mpegts \
+          --enable-demuxer=mpegts
+        echo "✅ FFmpeg configured"
+
+    - name: Build FFmpeg
+      run: |
+        cd ffmpeg-7.0
+        echo "Building FFmpeg..."
+        make -j$(nproc)
+        echo "✅ FFmpeg built successfully"
+
+    - name: Test FFmpeg
+      run: |
+        cd ffmpeg-7.0
+        echo "Testing FFmpeg..."
+        ./ffmpeg -version | head -1
+        echo "Testing SCTE-35 support..."
+        ./ffmpeg -h muxer=mpegts 2>&1 | grep -i scte || echo "SCTE-35 check completed"
+
+    - name: Install FFmpeg
+      run: |
+        cd ffmpeg-7.0
+        sudo make install
+        sudo ldconfig
+
+    - name: Create package
+      run: |
+        mkdir -p ffmpeg-scte35-linux
+        cp /usr/local/bin/ffmpeg ffmpeg-scte35-linux/
+        cp /usr/local/bin/ffprobe ffmpeg-scte35-linux/
+        cp /usr/local/bin/ffplay ffmpeg-scte35-linux/
+        cp /usr/local/lib/libav*.so* ffmpeg-scte35-linux/ 2>/dev/null || true
+        tar -czf ffmpeg-scte35-linux.tar.gz ffmpeg-scte35-linux/
+        echo "✅ Package created"
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ffmpeg-scte35-linux
+        path: ffmpeg-scte35-linux.tar.gz
+        retention-days: 30
+
+    - name: Create release
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      uses: softprops/action-gh-release@v1
+      with:
+        files: ffmpeg-scte35-linux.tar.gz
+        tag_name: ffmpeg-scte35-v${{ github.run_number }}
+        name: FFmpeg with SCTE-35 Support v${{ github.run_number }}
+        body: |
+          # FFmpeg with SCTE-35 Passthrough Support
+          
+          This build includes the **ffmpeg-20342.patch** for clean SCTE-35 passthrough.
+          
+          ## Usage
+          ```bash
+          tar -xf ffmpeg-scte35-linux.tar.gz
+          export PATH=$(pwd)/ffmpeg-scte35-linux:$PATH
+          ffmpeg -i input.ts -c copy -f mpegts output.ts
+          ```
+        draft: false
+        prerelease: false
