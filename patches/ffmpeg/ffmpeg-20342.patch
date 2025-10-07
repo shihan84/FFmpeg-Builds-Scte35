@@ -1,0 +1,105 @@
+From da29faa314e3abc5f325a0988ac1424d8e4a0746 Mon Sep 17 00:00:00 2001
+From: Pierre Le Fevre <hello@pierrelf.com>
+Date: Wed, 11 Jun 2025 15:25:13 +0200
+Subject: [PATCH] avformat/mpegts: Passthrough SCTE 35 Current behavior breaks
+ SCTE 35 by wrapping it in a PES packet, this adds the logic for the SCTE 35
+ messages to be passed through cleanly.
+
+Signed-off-by: Pierre Le Fevre <hello@pierrelf.com>
+---
+ libavformat/mpegtsenc.c | 27 +++++++++++++++++++++++++++
+ libavformat/mux.c       |  6 ++++--
+ 2 files changed, 31 insertions(+), 2 deletions(-)
+
+diff --git a/libavformat/mpegtsenc.c b/libavformat/mpegtsenc.c
+index 6935b71cfe..ba28e17696 100644
+--- a/libavformat/mpegtsenc.c
++++ b/libavformat/mpegtsenc.c
+@@ -84,6 +84,7 @@ typedef struct MpegTSWrite {
+     MpegTSSection pat; /* MPEG-2 PAT table */
+     MpegTSSection sdt; /* MPEG-2 SDT table context */
+     MpegTSSection nit; /* MPEG-2 NIT table context */
++    MpegTSSection scte35;
+     MpegTSService **services;
+     AVPacket *pkt;
+     int64_t sdt_period; /* SDT period in PCR time base */
+@@ -443,6 +444,9 @@ static int get_dvb_stream_type(AVFormatContext *s, AVStream *st)
+             stream_type = STREAM_TYPE_PRIVATE_DATA;
+         }
+         break;
++    case AV_CODEC_ID_SCTE_35:
++        stream_type = STREAM_TYPE_SCTE_DATA_SCTE_35;
++        break;
+     default:
+         av_log_once(s, AV_LOG_WARNING, AV_LOG_DEBUG, &ts_st->data_st_warning,
+                     "Stream %d, codec %s, is muxed as a private data stream "
+@@ -530,6 +534,13 @@ static int mpegts_write_pmt(AVFormatContext *s, MpegTSService *service)
+         *q++ = 0xfc;        // private_data_byte
+     }
+
++    for (i = 0; i < s->nb_streams; i++) {
++        if(s->streams[i]->codecpar->codec_id==AV_CODEC_ID_SCTE_35) {
++            put_registration_descriptor(&q, MKTAG('C', 'U', 'E', 'I'));
++            break;
++        }
++    }
++
+     val = 0xf000 | (q - program_info_length_ptr - 2);
+     program_info_length_ptr[0] = val >> 8;
+     program_info_length_ptr[1] = val;
+@@ -1160,6 +1171,11 @@ static int mpegts_init(AVFormatContext *s)
+     ts->nit.write_packet = section_write_packet;
+     ts->nit.opaque       = s;
+
++    ts->scte35.cc           = 15;
++    ts->scte35.discontinuity= ts->flags & MPEGTS_FLAG_DISCONT;
++    ts->scte35.write_packet = section_write_packet;
++    ts->scte35.opaque       = s;
++
+     ts->pkt = ffformatcontext(s)->pkt;
+
+     /* assign pids to each stream */
+@@ -2195,6 +2211,17 @@ static int mpegts_write_packet_internal(AVFormatContext *s, AVPacket *pkt)
+         mpegts_write_pes(s, st, buf, size, pts, dts,
+                          pkt->flags & AV_PKT_FLAG_KEY, stream_id);
+         return 0;
++    } else if (st->codecpar->codec_id == AV_CODEC_ID_SCTE_35) {
++        uint8_t q[1024];
++        unsigned int len;
++
++        len = pkt->size;
++        memcpy(q, pkt->data, len);
++
++        ts->scte35.pid = ts_st->pid;
++
++        mpegts_write_section(&ts->scte35, q, len);
++        return 0;
+     }
+
+     if (ts_st->payload_size && (ts_st->payload_size + size > ts->pes_payload_size ||
+diff --git a/libavformat/mux.c b/libavformat/mux.c
+index db3b6c2bfe..411c9674df 100644
+--- a/libavformat/mux.c
++++ b/libavformat/mux.c
+@@ -325,7 +325,8 @@ static int init_muxer(AVFormatContext *s, AVDictionary **options)
+         }
+
+         if (par->codec_type != AVMEDIA_TYPE_ATTACHMENT &&
+-            par->codec_id != AV_CODEC_ID_SMPTE_2038)
++            par->codec_id != AV_CODEC_ID_SMPTE_2038 &&
++            par->codec_id != AV_CODEC_ID_SCTE_35)
+             fci->nb_interleaved_streams++;
+     }
+     fci->interleave_packet = of->interleave_packet;
+@@ -959,7 +960,8 @@ int ff_interleave_packet_per_dts(AVFormatContext *s, AVPacket *pkt,
+         } else if (par->codec_type != AVMEDIA_TYPE_ATTACHMENT &&
+                    par->codec_id != AV_CODEC_ID_VP8 &&
+                    par->codec_id != AV_CODEC_ID_VP9 &&
+-                   par->codec_id != AV_CODEC_ID_SMPTE_2038) {
++                   par->codec_id != AV_CODEC_ID_SMPTE_2038 &&
++                   par->codec_id != AV_CODEC_ID_SCTE_35) {
+             ++noninterleaved_count;
+         }
+     }
+--
+2.49.1
